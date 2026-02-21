@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,7 +29,11 @@ type Store struct {
 
 // New creates a Store and initializes the run directory with a timestamp.
 func New(baseDir string) (*Store, error) {
-	ts := time.Now().Format("2006-01-02T15-04-05")
+	var suffix [3]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return nil, fmt.Errorf("failed to generate random suffix: %w", err)
+	}
+	ts := time.Now().Format("2006-01-02T15-04-05") + "-" + hex.EncodeToString(suffix[:])
 	runDir := filepath.Join(baseDir, ts)
 
 	// Create round directories upfront.

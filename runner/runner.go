@@ -18,21 +18,27 @@ func StripANSI(b []byte) []byte {
 	return ansiPattern.ReplaceAll(b, nil)
 }
 
-// Run executes the adapter's command with the given prompt, applying a context
-// timeout. It retries once on non-zero exit with a short backoff.
+// Run executes the adapter's command with the given prompt. The timeout is a
+// total budget shared across the initial attempt and one optional retry. This
+// prevents a 120s timeout from becoming ~242s when a retry fires.
 func Run(ctx context.Context, a adapter.Adapter, prompt string, timeout time.Duration) adapter.Response {
-	resp := attempt(ctx, a, prompt, timeout)
-	if resp.ExitCode != 0 {
-		// Retry once after a short backoff.
-		time.Sleep(2 * time.Second)
-		resp = attempt(ctx, a, prompt, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp := attempt(ctx, a, prompt)
+	if resp.ExitCode != 0 && ctx.Err() == nil {
+		// Retry once with a short backoff, respecting the timeout budget.
+		select {
+		case <-ctx.Done():
+			return resp
+		case <-time.After(2 * time.Second):
+		}
+		resp = attempt(ctx, a, prompt)
 	}
 	return resp
 }
 
-func attempt(ctx context.Context, a adapter.Adapter, prompt string, timeout time.Duration) adapter.Response {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+func attempt(ctx context.Context, a adapter.Adapter, prompt string) adapter.Response {
 
 	start := time.Now()
 	cmd := a.BuildCommand(prompt)
@@ -66,7 +72,7 @@ func attempt(ctx context.Context, a adapter.Adapter, prompt string, timeout time
 			Model:    a.Name(),
 			Raw:      stdout.Bytes(),
 			Content:  "",
-			Error:    fmt.Sprintf("timeout after %s", timeout),
+			Error:    fmt.Sprintf("timeout/cancelled: %v", ctx.Err()),
 			Duration: time.Since(start),
 			ExitCode: -1,
 		}

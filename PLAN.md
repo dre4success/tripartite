@@ -99,9 +99,9 @@ Before running, the system verifies:
 
 ## Run Artifacts
 
-Each run is persisted to `./runs/<timestamp>/`:
+Each run is persisted to `./runs/<timestamp>-<random>/`:
 ```
-runs/2026-02-21T10-30-00/
+runs/2026-02-21T10-30-00-a1b2c3/
 ├── input.json           # Original prompt + config
 ├── round-1/
 │   ├── claude.json
@@ -124,6 +124,13 @@ runs/2026-02-21T10-30-00/
 
 **OUT**: No Cobra, no TUI library, no review/build subcommands, no git worktree mode, no patch application.
 
+## Post-Review Fixes (from Antigravity + Codex reviews)
+
+- [x] Resilient JSON parsing: all adapters now scan line-by-line in reverse via shared `ExtractJSON()` — handles CLI preamble (spinners, "Thinking...", warnings)
+- [x] Shared timeout budget: `Run()` creates one `context.WithTimeout` shared across initial attempt + retry, so a 120s timeout can never become ~242s
+- [x] Failed model filtering: rounds 2 and 3 only fan out to models that succeeded in the prior round, and only include successful responses in prompts
+- [x] Run directory uniqueness: timestamp now includes a 3-byte random hex suffix to prevent collisions on concurrent/same-second runs
+
 ## Status
 
 - [x] Project scaffold (git, go.mod, directory structure)
@@ -133,4 +140,5 @@ runs/2026-02-21T10-30-00/
 - [x] Store (run artifact persistence)
 - [x] Orchestrator (3-round flow)
 - [x] main.go (CLI flags, subcommand routing)
+- [x] Post-review hardening (JSON parsing, timeout, filtering, uniqueness)
 - [ ] Testing with live CLIs

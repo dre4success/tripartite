@@ -15,6 +15,9 @@ type Result struct {
 }
 
 // Check runs preflight checks on the given adapters.
+// Preflight verifies binary presence and blocked env vars only.
+// Auth verification is the operator's responsibility — ensure you are
+// logged in to each CLI before running tripartite.
 // If allowAPIKeys is true, blocked env var checks are skipped.
 // Returns an error only if fewer than minModels are ready.
 func Check(adapters []adapter.Adapter, allowAPIKeys bool, minModels int) (*Result, error) {
@@ -25,11 +28,6 @@ func Check(adapters []adapter.Adapter, allowAPIKeys bool, minModels int) (*Resul
 	for _, a := range adapters {
 		if err := a.CheckInstalled(); err != nil {
 			res.Skipped[a.Name()] = fmt.Sprintf("not installed: %v", err)
-			continue
-		}
-
-		if err := a.CheckAuth(); err != nil {
-			res.Skipped[a.Name()] = fmt.Sprintf("auth failed: %v", err)
 			continue
 		}
 

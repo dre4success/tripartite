@@ -1,7 +1,6 @@
 package adapter
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/exec"
 )
@@ -19,14 +18,6 @@ func (g *Gemini) CheckInstalled() error {
 	return nil
 }
 
-func (g *Gemini) CheckAuth() error {
-	cmd := exec.Command("gemini", "--version")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("gemini auth check failed (--version returned error): %w", err)
-	}
-	return nil
-}
-
 func (g *Gemini) BlockedEnvVars() []string {
 	return []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
 }
@@ -36,21 +27,11 @@ func (g *Gemini) BuildCommand(prompt string) *exec.Cmd {
 }
 
 // ParseResponse extracts content from Gemini's JSON output.
+// Scans line-by-line in reverse to handle CLI preamble text (spinners, warnings).
 func (g *Gemini) ParseResponse(stdout []byte) (string, error) {
-	var result struct {
-		Result string `json:"result"`
+	if content, ok := ExtractJSON(stdout); ok {
+		return content, nil
 	}
-	if err := json.Unmarshal(stdout, &result); err == nil && result.Result != "" {
-		return result.Result, nil
-	}
-
-	var alt struct {
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(stdout, &alt); err == nil && alt.Content != "" {
-		return alt.Content, nil
-	}
-
 	if len(stdout) > 0 {
 		return string(stdout), nil
 	}

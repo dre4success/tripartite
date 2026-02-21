@@ -32,23 +32,31 @@ func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 	saveRound(cfg.Store, 1, r1)
 	printResponses(r1)
 
-	// Need at least 2 successful responses for cross-review.
-	successful := successfulResponses(r1)
-	if len(successful) < 2 {
+	// Filter to only models that succeeded in round 1.
+	r1ok := successfulResponses(r1)
+	if len(r1ok) < 2 {
 		fmt.Println("\n[!] Fewer than 2 successful responses — skipping cross-review and synthesis.")
 		return allRounds, nil
 	}
+	r1Adapters := adaptersByName(cfg.Adapters, r1ok)
 
-	// --- Round 2: Cross-Review ---
+	// --- Round 2: Cross-Review (only successful models) ---
 	printRoundHeader(2, "Cross-Review")
-	r2 := fanOutReview(ctx, cfg.Adapters, r1, cfg.Timeout)
+	r2 := fanOutReview(ctx, r1Adapters, r1ok, cfg.Timeout)
 	allRounds = append(allRounds, r2)
 	saveRound(cfg.Store, 2, r2)
 	printResponses(r2)
 
-	// --- Round 3: Synthesis ---
+	// Filter to only models that succeeded in round 2.
+	r2ok := successfulResponses(r2)
+	r2Adapters := adaptersByName(cfg.Adapters, r2ok)
+	if len(r2Adapters) == 0 {
+		r2Adapters = r1Adapters // fall back to round-1 survivors
+	}
+
+	// --- Round 3: Synthesis (only successful models) ---
 	printRoundHeader(3, "Synthesis")
-	r3 := fanOutSynthesis(ctx, cfg.Adapters, r1, r2, cfg.Timeout)
+	r3 := fanOutSynthesis(ctx, r2Adapters, r1ok, r2ok, cfg.Timeout)
 	allRounds = append(allRounds, r3)
 	saveRound(cfg.Store, 3, r3)
 	printResponses(r3)
@@ -151,6 +159,22 @@ func successfulResponses(responses []adapter.Response) []adapter.Response {
 	for _, r := range responses {
 		if r.ExitCode == 0 && r.Content != "" {
 			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// adaptersByName returns the subset of adapters whose Name() matches a
+// successful response, preserving the adapter order.
+func adaptersByName(all []adapter.Adapter, responses []adapter.Response) []adapter.Adapter {
+	names := make(map[string]bool, len(responses))
+	for _, r := range responses {
+		names[r.Model] = true
+	}
+	var out []adapter.Adapter
+	for _, a := range all {
+		if names[a.Name()] {
+			out = append(out, a)
 		}
 	}
 	return out
