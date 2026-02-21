@@ -26,8 +26,8 @@ func (c *ClaudeAgent) SupportedModels() []string {
 	return []string{"opus", "sonnet", "haiku"}
 }
 
-func (c *ClaudeAgent) DefaultModel() string   { return "claude-sonnet-4-6" }
-func (c *ClaudeAgent) PromptMode() PromptMode  { return PromptArg }
+func (c *ClaudeAgent) DefaultModel() string  { return "claude-sonnet-4-6" }
+func (c *ClaudeAgent) PromptMode() PromptMode { return PromptArg }
 
 func (c *ClaudeAgent) BlockedEnvVars() []string {
 	return []string{"ANTHROPIC_API_KEY"}

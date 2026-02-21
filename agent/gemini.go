@@ -26,7 +26,7 @@ func (g *GeminiAgent) SupportedModels() []string {
 	return []string{"2.5-pro", "2.5-flash", "3"}
 }
 
-func (g *GeminiAgent) DefaultModel() string   { return "gemini-2.5-pro" }
+func (g *GeminiAgent) DefaultModel() string  { return "gemini-2.5-pro" }
 func (g *GeminiAgent) PromptMode() PromptMode { return PromptArg }
 
 func (g *GeminiAgent) BlockedEnvVars() []string {
@@ -46,7 +46,7 @@ func (g *GeminiAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 	case PromptTempFile:
 		// Fallback to stdin handled by runner
 	}
-	
+
 	if opts.Sandbox != "" {
 		args = append(args, "--sandbox")
 	}

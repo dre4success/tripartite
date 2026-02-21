@@ -91,8 +91,8 @@ var ModelAliases = map[string]map[string]string{
 	},
 	"codex": {
 		"o3":      "o3",
-		"o4mini":  "o4-mini",
 		"o4-mini": "o4-mini",
+		"o4mini":  "o4-mini",
 		"codex":   "codex-mini-latest",
 	},
 	"gemini": {
