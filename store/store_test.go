@@ -15,7 +15,7 @@ func TestStoreDelegateWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp failed: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	s, err := New(tempDir)
 	if err != nil {
@@ -98,7 +98,7 @@ func TestStorePartialDelegateWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp failed: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	s, err := New(tempDir)
 	if err != nil {

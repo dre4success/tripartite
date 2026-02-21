@@ -173,9 +173,9 @@ func (s *Store) SaveSummary(meta RunMeta, rounds [][]adapter.Response) error {
 	var b strings.Builder
 
 	b.WriteString("# Tripartite Run Summary\n\n")
-	b.WriteString(fmt.Sprintf("**Prompt:** %s\n\n", meta.Prompt))
-	b.WriteString(fmt.Sprintf("**Models:** %s\n\n", strings.Join(meta.Models, ", ")))
-	b.WriteString(fmt.Sprintf("**Timestamp:** %s\n\n", meta.Timestamp))
+	fmt.Fprintf(&b, "**Prompt:** %s\n\n", meta.Prompt)
+	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(meta.Models, ", "))
+	fmt.Fprintf(&b, "**Timestamp:** %s\n\n", meta.Timestamp)
 	b.WriteString("---\n\n")
 
 	roundNames := []string{"Initial Response", "Cross-Review", "Synthesis"}
@@ -184,12 +184,12 @@ func (s *Store) SaveSummary(meta RunMeta, rounds [][]adapter.Response) error {
 		if i < len(roundNames) {
 			roundLabel += " — " + roundNames[i]
 		}
-		b.WriteString(fmt.Sprintf("## %s\n\n", roundLabel))
+		fmt.Fprintf(&b, "## %s\n\n", roundLabel)
 
 		for _, resp := range responses {
-			b.WriteString(fmt.Sprintf("### %s (%.1fs)\n\n", resp.Model, resp.Duration.Seconds()))
+			fmt.Fprintf(&b, "### %s (%.1fs)\n\n", resp.Model, resp.Duration.Seconds())
 			if resp.Error != "" {
-				b.WriteString(fmt.Sprintf("**Error:** %s\n\n", resp.Error))
+				fmt.Fprintf(&b, "**Error:** %s\n\n", resp.Error)
 			}
 			b.WriteString(resp.Content)
 			b.WriteString("\n\n---\n\n")
@@ -257,7 +257,7 @@ func (s *Store) appendLine(path string, line []byte) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(line); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)

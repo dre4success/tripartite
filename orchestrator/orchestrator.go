@@ -175,7 +175,7 @@ func buildReviewPrompt(currentModel string, round1 []adapter.Response) string {
 		if resp.Model == currentModel {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("=== Response from %s ===\n%s\n\n", resp.Model, resp.Content))
+		fmt.Fprintf(&b, "=== Response from %s ===\n%s\n\n", resp.Model, resp.Content)
 	}
 
 	b.WriteString("Provide your detailed review of the above responses.")
@@ -190,12 +190,12 @@ func buildSynthesisPrompt(round1, round2 []adapter.Response) string {
 
 	b.WriteString("## Initial Responses\n\n")
 	for _, resp := range round1 {
-		b.WriteString(fmt.Sprintf("=== %s ===\n%s\n\n", resp.Model, resp.Content))
+		fmt.Fprintf(&b, "=== %s ===\n%s\n\n", resp.Model, resp.Content)
 	}
 
 	b.WriteString("## Cross-Reviews\n\n")
 	for _, resp := range round2 {
-		b.WriteString(fmt.Sprintf("=== Review by %s ===\n%s\n\n", resp.Model, resp.Content))
+		fmt.Fprintf(&b, "=== Review by %s ===\n%s\n\n", resp.Model, resp.Content)
 	}
 
 	b.WriteString("Provide your final synthesized answer.")

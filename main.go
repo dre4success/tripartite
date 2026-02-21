@@ -58,7 +58,9 @@ func runDelegate(args []string) {
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	worktreeEnabled := fs.Bool("worktree", false, "Run delegate task in an isolated git worktree")
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
-	fs.Parse(args[2:])
+	if err := fs.Parse(args[2:]); err != nil {
+		os.Exit(1)
+	}
 
 	factory, ok := agent.Registry[agentName]
 	if !ok {
@@ -141,7 +143,9 @@ func runBrainstorm(args []string) {
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
 
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
 	log := logger.New(*debug)
 	approvalLevel, err := adapter.ParseApprovalLevel(*approval)
 	if err != nil {
