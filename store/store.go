@@ -19,6 +19,13 @@ type RunMeta struct {
 	Models    []string `json:"models"`
 	Timeout   string   `json:"timeout"`
 	Timestamp string   `json:"timestamp"`
+	Mode      string   `json:"mode,omitempty"` // "one-shot" or "interactive"
+}
+
+// TurnMeta holds metadata for a single interactive turn.
+type TurnMeta struct {
+	Prompt string `json:"prompt"`
+	Turn   int    `json:"turn"`
 }
 
 // Store manages persisting run artifacts to disk.
@@ -52,9 +59,21 @@ func (s *Store) SaveInput(meta RunMeta) error {
 	return s.writeJSON(filepath.Join(s.RunDir, "input.json"), meta)
 }
 
-// SaveResponse writes a model's response to the appropriate round directory.
+// SaveResponse writes a model's response to the appropriate round directory
+// (flat layout for one-shot mode).
 func (s *Store) SaveResponse(round int, resp adapter.Response) error {
 	dir := filepath.Join(s.RunDir, fmt.Sprintf("round-%d", round))
+	filename := resp.Model + ".json"
+	return s.writeJSON(filepath.Join(dir, filename), resp)
+}
+
+// SaveTurnResponse writes a model's response under turn-N/round-N
+// (nested layout for interactive mode).
+func (s *Store) SaveTurnResponse(turn, round int, resp adapter.Response) error {
+	dir := filepath.Join(s.RunDir, fmt.Sprintf("turn-%d", turn), fmt.Sprintf("round-%d", round))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create %s: %w", dir, err)
+	}
 	filename := resp.Model + ".json"
 	return s.writeJSON(filepath.Join(dir, filename), resp)
 }
@@ -84,6 +103,50 @@ func (s *Store) SaveSummary(meta RunMeta, rounds [][]adapter.Response) error {
 			}
 			b.WriteString(resp.Content)
 			b.WriteString("\n\n---\n\n")
+		}
+	}
+
+	path := filepath.Join(s.RunDir, "summary.md")
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// SessionTurn holds a prompt and its round responses for session summary writing.
+// This mirrors orchestrator.Turn but lives here to avoid circular imports.
+type SessionTurn struct {
+	Prompt    string
+	Responses [][]adapter.Response
+}
+
+// SaveSessionSummary writes a summary.md for a multi-turn interactive session.
+func (s *Store) SaveSessionSummary(meta RunMeta, turns []SessionTurn) error {
+	var b strings.Builder
+
+	b.WriteString("# Tripartite Session Summary\n\n")
+	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(meta.Models, ", "))
+	fmt.Fprintf(&b, "**Timestamp:** %s\n\n", meta.Timestamp)
+	fmt.Fprintf(&b, "**Turns:** %d\n\n", len(turns))
+	b.WriteString("---\n\n")
+
+	roundNames := []string{"Initial Response", "Cross-Review", "Synthesis"}
+	for ti, turn := range turns {
+		fmt.Fprintf(&b, "# Turn %d\n\n", ti+1)
+		fmt.Fprintf(&b, "**Prompt:** %s\n\n", turn.Prompt)
+
+		for ri, responses := range turn.Responses {
+			roundLabel := fmt.Sprintf("Round %d", ri+1)
+			if ri < len(roundNames) {
+				roundLabel += " — " + roundNames[ri]
+			}
+			fmt.Fprintf(&b, "## %s\n\n", roundLabel)
+
+			for _, resp := range responses {
+				fmt.Fprintf(&b, "### %s (%.1fs)\n\n", resp.Model, resp.Duration.Seconds())
+				if resp.Error != "" {
+					fmt.Fprintf(&b, "**Error:** %s\n\n", resp.Error)
+				}
+				b.WriteString(resp.Content)
+				b.WriteString("\n\n---\n\n")
+			}
 		}
 	}
 

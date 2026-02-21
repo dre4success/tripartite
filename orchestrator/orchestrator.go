@@ -12,12 +12,20 @@ import (
 	"github.com/dre4success/tripartite/store"
 )
 
+// Turn represents one user prompt and the 3 rounds of responses it produced.
+type Turn struct {
+	Prompt    string
+	Responses [][]adapter.Response // [round1, round2, round3]
+}
+
 // Config holds the orchestrator's runtime configuration.
 type Config struct {
 	Prompt   string
 	Adapters []adapter.Adapter
 	Timeout  time.Duration
 	Store    *store.Store
+	History  []Turn // prior conversation turns (empty for one-shot)
+	TurnNum  int    // current turn number (0 = one-shot / first turn)
 }
 
 // Run executes the full 3-round orchestration flow and returns all responses
@@ -25,11 +33,14 @@ type Config struct {
 func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 	allRounds := make([][]adapter.Response, 0, 3)
 
+	// Build the initial prompt with conversation history prepended.
+	initialPrompt := buildInitialPrompt(cfg.Prompt, cfg.History)
+
 	// --- Round 1: Initial ---
 	printRoundHeader(1, "Initial Response")
-	r1 := fanOut(ctx, cfg.Adapters, cfg.Prompt, cfg.Timeout)
+	r1 := fanOut(ctx, cfg.Adapters, initialPrompt, cfg.Timeout)
 	allRounds = append(allRounds, r1)
-	saveRound(cfg.Store, 1, r1)
+	saveTurnRound(cfg.Store, cfg.TurnNum, 1, r1)
 	printResponses(r1)
 
 	// Filter to only models that succeeded in round 1.
@@ -44,7 +55,7 @@ func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 	printRoundHeader(2, "Cross-Review")
 	r2 := fanOutReview(ctx, r1Adapters, r1ok, cfg.Timeout)
 	allRounds = append(allRounds, r2)
-	saveRound(cfg.Store, 2, r2)
+	saveTurnRound(cfg.Store, cfg.TurnNum, 2, r2)
 	printResponses(r2)
 
 	// Filter to only models that succeeded in round 2.
@@ -58,7 +69,7 @@ func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 	printRoundHeader(3, "Synthesis")
 	r3 := fanOutSynthesis(ctx, r2Adapters, r1ok, r2ok, cfg.Timeout)
 	allRounds = append(allRounds, r3)
-	saveRound(cfg.Store, 3, r3)
+	saveTurnRound(cfg.Store, cfg.TurnNum, 3, r3)
 	printResponses(r3)
 
 	return allRounds, nil
@@ -180,10 +191,62 @@ func adaptersByName(all []adapter.Adapter, responses []adapter.Response) []adapt
 	return out
 }
 
-func saveRound(s *store.Store, round int, responses []adapter.Response) {
+// maxHistoryTurns is the maximum number of prior turns included in the prompt.
+// This prevents unbounded prompt growth in long interactive sessions, which
+// could hit OS ARG_MAX limits or model context windows.
+const maxHistoryTurns = 5
+
+// buildInitialPrompt prepends conversation history to the user's current prompt
+// so models see the full discussion thread. Only the last maxHistoryTurns turns
+// are included; older turns are noted but omitted.
+func buildInitialPrompt(prompt string, history []Turn) string {
+	if len(history) == 0 {
+		return prompt
+	}
+
+	var b strings.Builder
+	b.WriteString("## Previous conversation\n\n")
+
+	// Slide the window: only include the most recent turns.
+	start := 0
+	if len(history) > maxHistoryTurns {
+		start = len(history) - maxHistoryTurns
+		fmt.Fprintf(&b, "(Earlier %d turn(s) omitted for brevity)\n\n", start)
+	}
+
+	for i := start; i < len(history); i++ {
+		turn := history[i]
+		fmt.Fprintf(&b, "### Turn %d\n", i+1)
+		fmt.Fprintf(&b, "User: %s\n\n", turn.Prompt)
+
+		if len(turn.Responses) > 0 {
+			// Show round-1 (initial) responses as the canonical model answers.
+			for _, resp := range turn.Responses[0] {
+				if resp.ExitCode == 0 && resp.Content != "" {
+					fmt.Fprintf(&b, "%s: %s\n\n", resp.Model, resp.Content)
+				}
+			}
+		}
+	}
+
+	fmt.Fprintf(&b, "### Current prompt\n%s", prompt)
+	return b.String()
+}
+
+func saveTurnRound(s *store.Store, turnNum, round int, responses []adapter.Response) {
+	if turnNum == 0 {
+		// One-shot mode: use flat round-N directories (backwards compatible).
+		for _, resp := range responses {
+			if err := s.SaveResponse(round, resp); err != nil {
+				fmt.Printf("[warn] failed to save %s round-%d artifact: %v\n", resp.Model, round, err)
+			}
+		}
+		return
+	}
+	// Interactive mode: save under turn-N/round-N.
 	for _, resp := range responses {
-		if err := s.SaveResponse(round, resp); err != nil {
-			fmt.Printf("[warn] failed to save %s round-%d artifact: %v\n", resp.Model, round, err)
+		if err := s.SaveTurnResponse(turnNum, round, resp); err != nil {
+			fmt.Printf("[warn] failed to save %s turn-%d/round-%d artifact: %v\n", resp.Model, turnNum, round, err)
 		}
 	}
 }

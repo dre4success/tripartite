@@ -2,16 +2,23 @@
 
 ## What It Does
 
-Tripartite sends a single prompt to three subscription-based AI CLIs (Claude Code, ChatGPT Codex, Gemini CLI), collects their responses, runs a cross-review round, then synthesizes a final answer. All via CLI subscriptions — no API keys.
+Tripartite sends prompts to three subscription-based AI CLIs (Claude Code, ChatGPT Codex, Gemini CLI), collects their responses, runs a cross-review round, then synthesizes a final answer. All via CLI subscriptions — no API keys.
+
+Supports two modes:
+- **One-shot**: `tripartite brainstorm -p "prompt"` — single prompt, 3 rounds, exit
+- **Interactive**: `tripartite brainstorm` — REPL with ongoing conversation, full history across turns
 
 ## Architecture
 
 ```
-tripartite brainstorm -p "design a REST API for ..."
+tripartite brainstorm -p "design a REST API for ..."   # one-shot
+tripartite brainstorm                                   # interactive REPL
        │
-       ├── Preflight: check binaries, auth, env vars
+       ├── Preflight: check binaries, env vars
        │
-       ├── Round 1 (parallel): fan-out prompt to all 3 CLIs
+       ├── [Interactive] Enter REPL loop — read prompt from stdin
+       │
+       ├── Round 1 (parallel): fan-out prompt (+ conversation history) to all 3 CLIs
        │   ├── claude -p "$PROMPT" --output-format json
        │   ├── codex exec "$PROMPT" --json
        │   └── gemini -p "$PROMPT" --output-format json
@@ -21,6 +28,8 @@ tripartite brainstorm -p "design a REST API for ..."
        │
        ├── Round 3 (parallel): synthesis
        │   Each model gets: "Given initial responses + reviews, provide final synthesis"
+       │
+       ├── [Interactive] Loop back for next prompt (/quit to exit)
        │
        └── Output: terminal display + ./runs/<timestamp>/ artifacts
 ```
@@ -33,14 +42,16 @@ tripartite/
 ├── go.mod
 ├── PLAN.md                  # This file
 ├── orchestrator/
-│   └── orchestrator.go      # Round-based orchestration logic
+│   └── orchestrator.go      # Round-based orchestration logic, history support
 ├── adapter/
 │   ├── adapter.go           # Interface + common types
 │   ├── claude.go            # Claude Code adapter
 │   ├── codex.go             # Codex adapter
 │   └── gemini.go            # Gemini CLI adapter
+├── session/
+│   └── session.go           # Interactive REPL loop, conversation history
 ├── preflight/
-│   └── preflight.go         # Binary detection, auth checks, env var enforcement
+│   └── preflight.go         # Binary detection, env var enforcement
 ├── runner/
 │   └── runner.go            # Subprocess execution, timeout, retry, ANSI stripping
 └── store/
@@ -50,8 +61,11 @@ tripartite/
 ## CLI Usage
 
 ```bash
-# Basic brainstorm
+# One-shot brainstorm
 ./tripartite brainstorm -p "What is the best way to handle errors in Go?"
+
+# Interactive session (REPL)
+./tripartite brainstorm --models claude,codex,gemini
 
 # Single model
 ./tripartite brainstorm -p "Design a REST API" --models claude
@@ -63,11 +77,18 @@ tripartite/
 ./tripartite brainstorm -p "..." --allow-api-keys
 ```
 
+### Interactive Commands
+
+| Command | Action |
+|---------|--------|
+| `/quit`, `/exit` | End the session and save artifacts |
+| `/history` | Show conversation turn count |
+
 ## CLI Flags
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-p` | string | required | The prompt to send |
+| `-p` | string | (omit for interactive) | The prompt to send |
 | `--timeout` | duration | 120s | Per-model execution timeout |
 | `--allow-api-keys` | bool | false | Don't fail if API key env vars are set |
 | `--models` | string | "claude,codex,gemini" | Comma-separated list of models to use |
@@ -92,14 +113,17 @@ Each adapter wraps a CLI tool:
 ## Preflight Checks
 
 Before running, the system verifies:
-- Each enabled model's binary exists on PATH
-- Auth is configured (lightweight version check)
+- Each enabled model's binary exists on PATH (`exec.LookPath`)
 - No blocked API key env vars are set (unless `--allow-api-keys`)
 - At least 2 models must be available
+
+Note: Preflight does **not** verify auth/login status — that's the operator's responsibility.
 
 ## Run Artifacts
 
 Each run is persisted to `./runs/<timestamp>-<random>/`:
+
+**One-shot mode:**
 ```
 runs/2026-02-21T10-30-00-a1b2c3/
 ├── input.json           # Original prompt + config
@@ -107,14 +131,23 @@ runs/2026-02-21T10-30-00-a1b2c3/
 │   ├── claude.json
 │   ├── codex.json
 │   └── gemini.json
-├── round-2/
-│   ├── claude.json
-│   ├── codex.json
-│   └── gemini.json
-├── round-3/
-│   ├── claude.json
-│   ├── codex.json
-│   └── gemini.json
+├── round-2/...
+├── round-3/...
+└── summary.md
+```
+
+**Interactive mode:**
+```
+runs/2026-02-21T10-30-00-a1b2c3/
+├── input.json           # Session config (mode: "interactive")
+├── turn-1/
+│   ├── round-1/claude.json, codex.json, gemini.json
+│   ├── round-2/...
+│   └── round-3/...
+├── turn-2/
+│   ├── round-1/...
+│   ├── round-2/...
+│   └── round-3/...
 └── summary.md
 ```
 
@@ -141,4 +174,5 @@ runs/2026-02-21T10-30-00-a1b2c3/
 - [x] Orchestrator (3-round flow)
 - [x] main.go (CLI flags, subcommand routing)
 - [x] Post-review hardening (JSON parsing, timeout, filtering, uniqueness)
+- [x] Interactive mode (REPL session with conversation history)
 - [ ] Testing with live CLIs
