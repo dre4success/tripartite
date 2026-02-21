@@ -1,0 +1,94 @@
+package store
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/dre4success/tripartite/adapter"
+)
+
+// RunMeta holds metadata about the entire run, saved as input.json.
+type RunMeta struct {
+	Prompt    string   `json:"prompt"`
+	Models    []string `json:"models"`
+	Timeout   string   `json:"timeout"`
+	Timestamp string   `json:"timestamp"`
+}
+
+// Store manages persisting run artifacts to disk.
+type Store struct {
+	BaseDir string // e.g. "./runs"
+	RunDir  string // e.g. "./runs/2026-02-21T10-30-00"
+}
+
+// New creates a Store and initializes the run directory with a timestamp.
+func New(baseDir string) (*Store, error) {
+	ts := time.Now().Format("2006-01-02T15-04-05")
+	runDir := filepath.Join(baseDir, ts)
+
+	// Create round directories upfront.
+	for _, round := range []string{"round-1", "round-2", "round-3"} {
+		dir := filepath.Join(runDir, round)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create %s: %w", dir, err)
+		}
+	}
+
+	return &Store{BaseDir: baseDir, RunDir: runDir}, nil
+}
+
+// SaveInput writes the run metadata to input.json.
+func (s *Store) SaveInput(meta RunMeta) error {
+	return s.writeJSON(filepath.Join(s.RunDir, "input.json"), meta)
+}
+
+// SaveResponse writes a model's response to the appropriate round directory.
+func (s *Store) SaveResponse(round int, resp adapter.Response) error {
+	dir := filepath.Join(s.RunDir, fmt.Sprintf("round-%d", round))
+	filename := resp.Model + ".json"
+	return s.writeJSON(filepath.Join(dir, filename), resp)
+}
+
+// SaveSummary writes a summary.md file at the end of the run.
+func (s *Store) SaveSummary(meta RunMeta, rounds [][]adapter.Response) error {
+	var b strings.Builder
+
+	b.WriteString("# Tripartite Run Summary\n\n")
+	b.WriteString(fmt.Sprintf("**Prompt:** %s\n\n", meta.Prompt))
+	b.WriteString(fmt.Sprintf("**Models:** %s\n\n", strings.Join(meta.Models, ", ")))
+	b.WriteString(fmt.Sprintf("**Timestamp:** %s\n\n", meta.Timestamp))
+	b.WriteString("---\n\n")
+
+	roundNames := []string{"Initial Response", "Cross-Review", "Synthesis"}
+	for i, responses := range rounds {
+		roundLabel := fmt.Sprintf("Round %d", i+1)
+		if i < len(roundNames) {
+			roundLabel += " — " + roundNames[i]
+		}
+		b.WriteString(fmt.Sprintf("## %s\n\n", roundLabel))
+
+		for _, resp := range responses {
+			b.WriteString(fmt.Sprintf("### %s (%.1fs)\n\n", resp.Model, resp.Duration.Seconds()))
+			if resp.Error != "" {
+				b.WriteString(fmt.Sprintf("**Error:** %s\n\n", resp.Error))
+			}
+			b.WriteString(resp.Content)
+			b.WriteString("\n\n---\n\n")
+		}
+	}
+
+	path := filepath.Join(s.RunDir, "summary.md")
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func (s *Store) writeJSON(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("json marshal: %w", err)
+	}
+	return os.WriteFile(path, data, 0o644)
+}
