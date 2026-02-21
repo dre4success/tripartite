@@ -4,6 +4,9 @@ tripartite
 # Run artifacts
 runs/
 
+# Debug logs
+debug.log
+
 # Go
 *.exe
 *.exe~
