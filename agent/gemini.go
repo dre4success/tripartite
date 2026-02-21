@@ -51,6 +51,7 @@ func (g *GeminiAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 		args = append(args, "--sandbox")
 	}
 
+
 	model := opts.Model
 	if model == "" {
 		model = g.DefaultModel()
