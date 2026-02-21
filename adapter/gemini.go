@@ -24,8 +24,19 @@ func (g *Gemini) BlockedEnvVars() []string {
 	return []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
 }
 
-func (g *Gemini) BuildCommand(prompt string) *exec.Cmd {
-	return exec.Command("gemini", "-p", prompt, "--output-format", "json")
+func (g *Gemini) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
+	args := []string{"-p", prompt, "--output-format", "json"}
+
+	switch approval {
+	case ApprovalRead:
+		args = append(args, "--approval-mode", "plan")
+	case ApprovalFull:
+		args = append(args, "--yolo")
+	default:
+		args = append(args, "--approval-mode", "auto_edit")
+	}
+
+	return exec.Command("gemini", args...)
 }
 
 // ParseResponse extracts user-facing content from Gemini output.

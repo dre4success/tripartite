@@ -134,7 +134,8 @@ func runBrainstorm(args []string) {
 	fs := flag.NewFlagSet("brainstorm", flag.ExitOnError)
 
 	prompt := fs.String("p", "", "The prompt to send (omit for interactive mode)")
-	timeout := fs.Duration("timeout", 120*time.Second, "Per-model execution timeout")
+	timeout := fs.Duration("timeout", 5*time.Minute, "Per-model execution timeout")
+	approval := fs.String("approval", "edit", "Approval mode for brainstorm tool actions: read|edit|full")
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
 	models := fs.String("models", "claude,codex,gemini", "Comma-separated list of models to use")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
@@ -142,6 +143,11 @@ func runBrainstorm(args []string) {
 
 	fs.Parse(args)
 	log := logger.New(*debug)
+	approvalLevel, err := adapter.ParseApprovalLevel(*approval)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Resolve adapters from model names.
 	modelNames := strings.Split(*models, ",")
@@ -204,6 +210,7 @@ func runBrainstorm(args []string) {
 		if err := session.Start(ctx, session.Config{
 			Adapters: result.Ready,
 			Timeout:  *timeout,
+			Approval: approvalLevel,
 			Store:    s,
 			Logger:   log,
 		}); err != nil {
@@ -230,6 +237,7 @@ func runBrainstorm(args []string) {
 		Prompt:   *prompt,
 		Adapters: result.Ready,
 		Timeout:  *timeout,
+		Approval: approvalLevel,
 		Store:    s,
 		Logger:   log,
 	})
@@ -259,7 +267,8 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Brainstorm Flags:")
 	fmt.Fprintln(os.Stderr, "  -p string          The prompt to send (omit for interactive mode)")
-	fmt.Fprintln(os.Stderr, "  --timeout duration  Per-model execution timeout (default 120s)")
+	fmt.Fprintln(os.Stderr, "  --timeout duration  Per-model execution timeout (default 5m)")
+	fmt.Fprintln(os.Stderr, "  --approval string  Approval mode for tool actions: read|edit|full (default \"edit\")")
 	fmt.Fprintln(os.Stderr, "  --allow-api-keys   Don't fail if API key env vars are set")
 	fmt.Fprintln(os.Stderr, "  --models string    Comma-separated models (default \"claude,codex,gemini\")")
 	fmt.Fprintln(os.Stderr, "  --debug            Print structured diagnostics to stderr")

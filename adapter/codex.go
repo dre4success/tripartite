@@ -24,8 +24,19 @@ func (c *Codex) BlockedEnvVars() []string {
 	return []string{"CODEX_API_KEY", "OPENAI_API_KEY"}
 }
 
-func (c *Codex) BuildCommand(prompt string) *exec.Cmd {
-	return exec.Command("codex", "exec", prompt, "--json")
+func (c *Codex) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
+	args := []string{"exec", prompt, "--json"}
+
+	switch approval {
+	case ApprovalRead:
+		args = append(args, "--sandbox", "read-only")
+	case ApprovalFull:
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	default:
+		args = append(args, "--full-auto")
+	}
+
+	return exec.Command("codex", args...)
 }
 
 // ParseResponse extracts user-facing text from Codex JSONL output.

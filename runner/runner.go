@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/dre4success/tripartite/adapter"
@@ -21,11 +22,11 @@ func StripANSI(b []byte) []byte {
 // Run executes the adapter's command with the given prompt. The timeout is a
 // total budget shared across the initial attempt and one optional retry. This
 // prevents a 120s timeout from becoming ~242s when a retry fires.
-func Run(ctx context.Context, a adapter.Adapter, prompt string, timeout time.Duration) adapter.Response {
+func Run(ctx context.Context, a adapter.Adapter, prompt string, timeout time.Duration, approval adapter.ApprovalLevel) adapter.Response {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resp := attempt(ctx, a, prompt)
+	resp := attempt(ctx, a, prompt, approval)
 	if resp.ExitCode != 0 && ctx.Err() == nil {
 		// Retry once with a short backoff, respecting the timeout budget.
 		select {
@@ -33,15 +34,15 @@ func Run(ctx context.Context, a adapter.Adapter, prompt string, timeout time.Dur
 			return resp
 		case <-time.After(2 * time.Second):
 		}
-		resp = attempt(ctx, a, prompt)
+		resp = attempt(ctx, a, prompt, approval)
 	}
 	return resp
 }
 
-func attempt(ctx context.Context, a adapter.Adapter, prompt string) adapter.Response {
+func attempt(ctx context.Context, a adapter.Adapter, prompt string, approval adapter.ApprovalLevel) adapter.Response {
 
 	start := time.Now()
-	cmd := a.BuildCommand(prompt)
+	cmd := a.BuildCommand(prompt, approval)
 	cmd.Env = cmd.Environ() // inherit current env
 
 	var stdout, stderr bytes.Buffer
@@ -68,11 +69,22 @@ func attempt(ctx context.Context, a adapter.Adapter, prompt string) adapter.Resp
 	select {
 	case <-ctx.Done():
 		_ = cmd.Process.Kill()
+		raw := stdout.Bytes()
+		cleaned := StripANSI(raw)
+		content, parseErr := a.ParseResponse(cleaned)
+		stderrText := strings.TrimSpace(string(StripANSI(stderr.Bytes())))
+		errMsg := fmt.Sprintf("timeout/cancelled: %v", ctx.Err())
+		if stderrText != "" {
+			errMsg = fmt.Sprintf("%s | stderr: %s", errMsg, truncateForError(stderrText, 400))
+		}
+		if parseErr != nil {
+			errMsg = fmt.Sprintf("%s | parse: %s", errMsg, truncateForError(parseErr.Error(), 200))
+		}
 		return adapter.Response{
 			Model:    a.Name(),
-			Raw:      stdout.Bytes(),
-			Content:  "",
-			Error:    fmt.Sprintf("timeout/cancelled: %v", ctx.Err()),
+			Raw:      raw,
+			Content:  content,
+			Error:    errMsg,
 			Duration: time.Since(start),
 			ExitCode: -1,
 		}
@@ -102,4 +114,15 @@ func attempt(ctx context.Context, a adapter.Adapter, prompt string) adapter.Resp
 			ExitCode: exitCode,
 		}
 	}
+}
+
+func truncateForError(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
 }

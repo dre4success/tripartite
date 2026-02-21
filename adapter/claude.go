@@ -22,8 +22,19 @@ func (c *Claude) BlockedEnvVars() []string {
 	return []string{"ANTHROPIC_API_KEY"}
 }
 
-func (c *Claude) BuildCommand(prompt string) *exec.Cmd {
-	return exec.Command("claude", "-p", prompt, "--output-format", "json")
+func (c *Claude) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
+	args := []string{"-p", prompt, "--output-format", "json"}
+
+	switch approval {
+	case ApprovalRead:
+		args = append(args, "--permission-mode", "plan")
+	case ApprovalFull:
+		args = append(args, "--dangerously-skip-permissions")
+	default:
+		args = append(args, "--permission-mode", "acceptEdits")
+	}
+
+	return exec.Command("claude", args...)
 }
 
 // ParseResponse extracts the content from Claude's JSON output.

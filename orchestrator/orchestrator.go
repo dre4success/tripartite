@@ -24,6 +24,7 @@ type Config struct {
 	Prompt   string
 	Adapters []adapter.Adapter
 	Timeout  time.Duration
+	Approval adapter.ApprovalLevel
 	Store    *store.Store
 	History  []Turn // prior conversation turns (empty for one-shot)
 	TurnNum  int    // current turn number (0 = one-shot / first turn)
@@ -40,7 +41,7 @@ func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 
 	// --- Round 1: Initial ---
 	printRoundHeader(1, "Initial Response")
-	r1 := fanOut(ctx, cfg.Adapters, initialPrompt, cfg.Timeout, 1, cfg.Logger)
+	r1 := fanOut(ctx, cfg.Adapters, initialPrompt, cfg.Timeout, cfg.Approval, 1, cfg.Logger)
 	allRounds = append(allRounds, r1)
 	saveTurnRound(cfg.Store, cfg.TurnNum, 1, r1)
 	printResponses(r1)
@@ -55,7 +56,7 @@ func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 
 	// --- Round 2: Cross-Review (only successful models) ---
 	printRoundHeader(2, "Cross-Review")
-	r2 := fanOutReview(ctx, r1Adapters, r1ok, cfg.Timeout, 2, cfg.Logger)
+	r2 := fanOutReview(ctx, r1Adapters, r1ok, cfg.Timeout, cfg.Approval, 2, cfg.Logger)
 	allRounds = append(allRounds, r2)
 	saveTurnRound(cfg.Store, cfg.TurnNum, 2, r2)
 	printResponses(r2)
@@ -69,7 +70,7 @@ func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 
 	// --- Round 3: Synthesis (only successful models) ---
 	printRoundHeader(3, "Synthesis")
-	r3 := fanOutSynthesis(ctx, r2Adapters, r1ok, r2ok, cfg.Timeout, 3, cfg.Logger)
+	r3 := fanOutSynthesis(ctx, r2Adapters, r1ok, r2ok, cfg.Timeout, cfg.Approval, 3, cfg.Logger)
 	allRounds = append(allRounds, r3)
 	saveTurnRound(cfg.Store, cfg.TurnNum, 3, r3)
 	printResponses(r3)
@@ -78,7 +79,7 @@ func Run(ctx context.Context, cfg Config) ([][]adapter.Response, error) {
 }
 
 // fanOut sends the same prompt to all adapters in parallel.
-func fanOut(ctx context.Context, adapters []adapter.Adapter, prompt string, timeout time.Duration, round int, log *logger.Logger) []adapter.Response {
+func fanOut(ctx context.Context, adapters []adapter.Adapter, prompt string, timeout time.Duration, approval adapter.ApprovalLevel, round int, log *logger.Logger) []adapter.Response {
 	responses := make([]adapter.Response, len(adapters))
 	var wg sync.WaitGroup
 
@@ -90,7 +91,7 @@ func fanOut(ctx context.Context, adapters []adapter.Adapter, prompt string, time
 			if log != nil {
 				log.Debug("brainstorm round started", "round", round, "model", adp.Name(), "prompt_len", len(prompt))
 			}
-			responses[idx] = runner.Run(ctx, adp, prompt, timeout)
+			responses[idx] = runner.Run(ctx, adp, prompt, timeout, approval)
 			printLifecycle(round, responses[idx], log)
 		}(i, a)
 	}
@@ -100,7 +101,7 @@ func fanOut(ctx context.Context, adapters []adapter.Adapter, prompt string, time
 }
 
 // fanOutReview sends each model a prompt containing the other models' responses.
-func fanOutReview(ctx context.Context, adapters []adapter.Adapter, round1 []adapter.Response, timeout time.Duration, round int, log *logger.Logger) []adapter.Response {
+func fanOutReview(ctx context.Context, adapters []adapter.Adapter, round1 []adapter.Response, timeout time.Duration, approval adapter.ApprovalLevel, round int, log *logger.Logger) []adapter.Response {
 	responses := make([]adapter.Response, len(adapters))
 	var wg sync.WaitGroup
 
@@ -113,7 +114,7 @@ func fanOutReview(ctx context.Context, adapters []adapter.Adapter, round1 []adap
 			if log != nil {
 				log.Debug("brainstorm review round started", "round", round, "model", adp.Name(), "prompt_len", len(prompt))
 			}
-			responses[idx] = runner.Run(ctx, adp, prompt, timeout)
+			responses[idx] = runner.Run(ctx, adp, prompt, timeout, approval)
 			printLifecycle(round, responses[idx], log)
 		}(i, a)
 	}
@@ -123,7 +124,7 @@ func fanOutReview(ctx context.Context, adapters []adapter.Adapter, round1 []adap
 }
 
 // fanOutSynthesis sends each model all round-1 and round-2 responses to synthesize.
-func fanOutSynthesis(ctx context.Context, adapters []adapter.Adapter, round1, round2 []adapter.Response, timeout time.Duration, round int, log *logger.Logger) []adapter.Response {
+func fanOutSynthesis(ctx context.Context, adapters []adapter.Adapter, round1, round2 []adapter.Response, timeout time.Duration, approval adapter.ApprovalLevel, round int, log *logger.Logger) []adapter.Response {
 	responses := make([]adapter.Response, len(adapters))
 	var wg sync.WaitGroup
 
@@ -136,7 +137,7 @@ func fanOutSynthesis(ctx context.Context, adapters []adapter.Adapter, round1, ro
 			if log != nil {
 				log.Debug("brainstorm synthesis round started", "round", round, "model", adp.Name(), "prompt_len", len(prompt))
 			}
-			responses[idx] = runner.Run(ctx, adp, prompt, timeout)
+			responses[idx] = runner.Run(ctx, adp, prompt, timeout, approval)
 			printLifecycle(round, responses[idx], log)
 		}(i, a)
 	}

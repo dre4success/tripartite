@@ -18,6 +18,7 @@ import (
 type Config struct {
 	Adapters []adapter.Adapter
 	Timeout  time.Duration
+	Approval adapter.ApprovalLevel
 	Store    *store.Store
 	Logger   *logger.Logger
 }
@@ -72,6 +73,7 @@ func Start(ctx context.Context, cfg Config) error {
 			Prompt:   input,
 			Adapters: cfg.Adapters,
 			Timeout:  cfg.Timeout,
+			Approval: cfg.Approval,
 			Store:    cfg.Store,
 			History:  turns,
 			TurnNum:  turnNum,

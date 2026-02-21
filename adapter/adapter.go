@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -25,8 +26,31 @@ type Adapter interface {
 	BinaryName() string
 	CheckInstalled() error
 	BlockedEnvVars() []string
-	BuildCommand(prompt string) *exec.Cmd
+	BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd
 	ParseResponse(stdout []byte) (string, error)
+}
+
+// ApprovalLevel controls how aggressively brainstorm runs can auto-approve
+// model tool actions in non-interactive mode.
+type ApprovalLevel string
+
+const (
+	ApprovalRead ApprovalLevel = "read"
+	ApprovalEdit ApprovalLevel = "edit"
+	ApprovalFull ApprovalLevel = "full"
+)
+
+func ParseApprovalLevel(raw string) (ApprovalLevel, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(ApprovalEdit):
+		return ApprovalEdit, nil
+	case string(ApprovalRead):
+		return ApprovalRead, nil
+	case string(ApprovalFull):
+		return ApprovalFull, nil
+	default:
+		return "", fmt.Errorf("invalid approval level %q (expected: read, edit, full)", raw)
+	}
 }
 
 // Registry maps model names to their adapter constructors.
