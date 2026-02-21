@@ -11,6 +11,7 @@ import (
 // Response holds the result of running a single model CLI command.
 type Response struct {
 	Model    string        `json:"model"`
+	ModelID  string        `json:"model_id,omitempty"`
 	Raw      []byte        `json:"raw"`
 	Content  string        `json:"content"`
 	Error    string        `json:"error,omitempty"`
@@ -28,6 +29,7 @@ type Adapter interface {
 	BlockedEnvVars() []string
 	BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd
 	ParseResponse(stdout []byte) (string, error)
+	ExtractModel(stdout []byte) string
 }
 
 // ApprovalLevel controls how aggressively brainstorm runs can auto-approve

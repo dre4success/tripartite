@@ -296,7 +296,11 @@ func printRoundHeader(round int, label string) {
 
 func printResponses(responses []adapter.Response) {
 	for _, resp := range responses {
-		fmt.Printf("--- %s (%.1fs) ---\n", resp.Model, resp.Duration.Seconds())
+		label := resp.Model
+		if resp.ModelID != "" {
+			label = fmt.Sprintf("%s/%s", resp.Model, resp.ModelID)
+		}
+		fmt.Printf("--- %s (%.1fs) ---\n", label, resp.Duration.Seconds())
 		if resp.Error != "" {
 			fmt.Printf("[ERROR] %s\n", resp.Error)
 		}

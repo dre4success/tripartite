@@ -107,6 +107,7 @@ func attempt(ctx context.Context, a adapter.Adapter, prompt string, approval ada
 
 		return adapter.Response{
 			Model:    a.Name(),
+			ModelID:  a.ExtractModel(raw),
 			Raw:      raw,
 			Content:  content,
 			Error:    errMsg,

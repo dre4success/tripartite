@@ -39,6 +39,31 @@ func (g *Gemini) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
 	return exec.Command("gemini", args...)
 }
 
+// ExtractModel returns the primary model from Gemini's stats.models field.
+func (g *Gemini) ExtractModel(stdout []byte) string {
+	var resp struct {
+		Stats struct {
+			Models map[string]struct {
+				Tokens struct {
+					Candidates int `json:"candidates"`
+				} `json:"tokens"`
+			} `json:"models"`
+		} `json:"stats"`
+	}
+	if err := json.Unmarshal(stdout, &resp); err != nil || len(resp.Stats.Models) == 0 {
+		return ""
+	}
+	var best string
+	var bestTokens int
+	for name, usage := range resp.Stats.Models {
+		if usage.Tokens.Candidates > bestTokens {
+			best = name
+			bestTokens = usage.Tokens.Candidates
+		}
+	}
+	return best
+}
+
 // ParseResponse extracts user-facing content from Gemini output.
 func (g *Gemini) ParseResponse(stdout []byte) (string, error) {
 	raw := strings.TrimSpace(string(stdout))

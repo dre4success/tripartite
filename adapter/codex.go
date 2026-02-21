@@ -39,6 +39,11 @@ func (c *Codex) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
 	return exec.Command("codex", args...)
 }
 
+// ExtractModel returns "" — Codex JSONL output does not include a model identifier.
+func (c *Codex) ExtractModel(stdout []byte) string {
+	return ""
+}
+
 // ParseResponse extracts user-facing text from Codex JSONL output.
 func (c *Codex) ParseResponse(stdout []byte) (string, error) {
 	raw := strings.TrimSpace(string(stdout))

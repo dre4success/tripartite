@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 )
@@ -35,6 +36,27 @@ func (c *Claude) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
 	}
 
 	return exec.Command("claude", args...)
+}
+
+// ExtractModel returns the primary model from Claude's JSON modelUsage field.
+func (c *Claude) ExtractModel(stdout []byte) string {
+	var resp struct {
+		ModelUsage map[string]struct {
+			OutputTokens int `json:"outputTokens"`
+		} `json:"modelUsage"`
+	}
+	if err := json.Unmarshal(stdout, &resp); err != nil || len(resp.ModelUsage) == 0 {
+		return ""
+	}
+	var best string
+	var bestTokens int
+	for name, usage := range resp.ModelUsage {
+		if usage.OutputTokens > bestTokens {
+			best = name
+			bestTokens = usage.OutputTokens
+		}
+	}
+	return best
 }
 
 // ParseResponse extracts the content from Claude's JSON output.

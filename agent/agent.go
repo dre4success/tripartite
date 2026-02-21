@@ -90,15 +90,18 @@ var ModelAliases = map[string]map[string]string{
 		"haiku":  "claude-haiku-4-5-20251001",
 	},
 	"codex": {
+		"5.3":     "gpt-5.3-codex",
+		"5.2":     "gpt-5.2-codex",
+		"max":     "gpt-5.1-codex-max",
+		"mini":    "gpt-5.1-codex-mini",
 		"o3":      "o3",
 		"o4-mini": "o4-mini",
-		"o4mini":  "o4-mini",
-		"codex":   "codex-mini-latest",
 	},
 	"gemini": {
+		"3":         "gemini-3",
+		"3-flash":   "gemini-3-flash-preview",
 		"2.5-pro":   "gemini-2.5-pro",
 		"2.5-flash": "gemini-2.5-flash",
-		"3":         "gemini-3",
 	},
 }
 
