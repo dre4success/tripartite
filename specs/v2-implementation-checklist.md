@@ -117,31 +117,31 @@
 ## 4. Testing Checklist
 
 ### Unit
-- [ ] Event parsing per agent (happy path + unknown fields).
-- [ ] Prompt mode selection logic.
-- [ ] Cancellation timing path.
-- [ ] Store writes for normal + partial runs.
+- [x] Event parsing per agent (happy path + unknown fields).
+- [x] Prompt mode selection logic.
+- [x] Cancellation timing path.
+- [x] Store writes for normal + partial runs.
 
 ### Integration
-- [ ] `delegate` with each agent in a real repo.
-- [ ] Long prompt case (no argv overflow).
-- [ ] Unknown event lines survive into raw artifacts.
-- [ ] Ctrl+C leaves no orphan subprocesses.
+- [x] `delegate` with each agent in a real repo.
+- [x] Long prompt case (no argv overflow).
+- [x] Unknown event lines survive into raw artifacts.
+- [x] Ctrl+C leaves no orphan subprocesses.
 
 ### Regression
-- [ ] Existing `brainstorm` still runs.
-- [ ] Existing run artifact behavior remains valid.
+- [x] Existing `brainstorm` still runs.
+- [x] Existing run artifact behavior remains valid.
 
 ---
 
 ## 5. Release Gates (v2.0)
 
-- [ ] `tripartite delegate` works end-to-end for `claude`, `codex`, `gemini`.
-- [ ] Live streaming visible in terminal.
-- [ ] Artifacts are replayable and complete.
-- [ ] `--worktree` isolation verified when flag is passed.
-- [ ] No orphan processes after cancellation.
-- [ ] README/docs updated with examples and limitations.
+- [x] `tripartite delegate` works end-to-end for `claude`, `codex`, `gemini`.
+- [x] Live streaming visible in terminal.
+- [x] Artifacts are replayable and complete.
+- [x] `--worktree` isolation verified when flag is passed.
+- [x] No orphan processes after cancellation.
+- [x] README/docs updated with examples and limitations.
 
 ---
 

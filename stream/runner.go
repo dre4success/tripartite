@@ -81,9 +81,9 @@ func Run(ctx context.Context, a agent.Agent, prompt string, opts agent.StreamOpt
 	ctxDoneCh := ctx.Done()
 
 	var procErr error
-	var stdoutClosed, stderrClosed bool
+	var procDone, stdoutClosed, stderrClosed bool
 	for {
-		if procErr != nil && stdoutClosed && stderrClosed {
+		if procDone && stdoutClosed && stderrClosed {
 			return procErr
 		}
 
@@ -94,13 +94,16 @@ func Run(ctx context.Context, a agent.Agent, prompt string, opts agent.StreamOpt
 			procErr = cancelProcess(cmd, waitDoneCh)
 			ctxDoneCh = nil
 			waitDoneCh = nil
+			procDone = true
 		case err := <-waitDoneCh:
 			procErr = err
 			waitDoneCh = nil
 			ctxDoneCh = nil
+			procDone = true
 		case line, ok := <-stdoutLines:
 			if !ok {
 				stdoutClosed = true
+				stdoutLines = nil
 				if err := <-stdoutErr; err != nil && procErr == nil {
 					procErr = fmt.Errorf("stdout scan: %w", err)
 				}
@@ -122,6 +125,7 @@ func Run(ctx context.Context, a agent.Agent, prompt string, opts agent.StreamOpt
 		case line, ok := <-stderrLines:
 			if !ok {
 				stderrClosed = true
+				stderrLines = nil
 				if err := <-stderrErr; err != nil && procErr == nil {
 					procErr = fmt.Errorf("stderr scan: %w", err)
 				}

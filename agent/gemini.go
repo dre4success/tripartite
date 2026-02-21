@@ -3,14 +3,12 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"time"
 )
 
 // GeminiAgent implements Agent for the Gemini CLI.
-// Uses jsonl output mode. Model is injected via GEMINI_MODEL env var
-// since the CLI has no --model flag.
+// Uses stream-json output mode. Model is passed natively via --model.
 type GeminiAgent struct{}
 
 func (g *GeminiAgent) Name() string       { return "gemini" }
@@ -41,23 +39,26 @@ func (g *GeminiAgent) ContinuationArgs(sessionID string) []string {
 }
 
 func (g *GeminiAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
-	args := []string{prompt, "--output-format", "jsonl"}
-
+	args := []string{"--output-format", "stream-json"}
+	switch g.PromptMode() {
+	case PromptArg:
+		args = append(args, "-p", prompt)
+	case PromptTempFile:
+		// Fallback to stdin handled by runner
+	}
+	
 	if opts.Sandbox != "" {
-		args = append(args, "--sandbox", opts.Sandbox)
+		args = append(args, "--sandbox")
 	}
 
-	cmd := exec.Command("gemini", args...)
-
-	// Gemini has no --model flag; inject via environment variable.
 	model := opts.Model
 	if model == "" {
 		model = g.DefaultModel()
-	} else {
-		model = ResolveModel("gemini", model)
 	}
-	cmd.Env = append(os.Environ(), "GEMINI_MODEL="+model)
+	model = ResolveModel("gemini", model)
+	args = append(args, "--model", model)
 
+	cmd := exec.Command("gemini", args...)
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}

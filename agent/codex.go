@@ -26,7 +26,7 @@ func (c *CodexAgent) SupportedModels() []string {
 	return []string{"o3", "o4-mini", "o4mini", "codex"}
 }
 
-func (c *CodexAgent) DefaultModel() string   { return "o3" }
+func (c *CodexAgent) DefaultModel() string   { return "" }
 func (c *CodexAgent) PromptMode() PromptMode { return PromptArg }
 
 func (c *CodexAgent) BlockedEnvVars() []string {
@@ -61,7 +61,9 @@ func (c *CodexAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 	} else {
 		model = ResolveModel("codex", model)
 	}
-	args = append(args, "-m", model)
+	if model != "" {
+		args = append(args, "-m", model)
+	}
 
 	if sandbox := mapSandbox(opts.Sandbox); sandbox != "" {
 		args = append(args, "--sandbox", sandbox)
