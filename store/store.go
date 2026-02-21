@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dre4success/tripartite/adapter"
+	"github.com/dre4success/tripartite/agent"
 )
 
 // RunMeta holds metadata about the entire run, saved as input.json.
@@ -26,6 +27,35 @@ type RunMeta struct {
 type TurnMeta struct {
 	Prompt string `json:"prompt"`
 	Turn   int    `json:"turn"`
+}
+
+// DelegateWorkspace captures optional worktree metadata for delegate mode.
+type DelegateWorkspace struct {
+	Enabled      bool             `json:"enabled"`
+	TaskID       string           `json:"task_id,omitempty"`
+	WorktreePath string           `json:"worktree_path,omitempty"`
+	Branch       string           `json:"branch,omitempty"`
+	BaseCommit   string           `json:"base_commit,omitempty"`
+	HeadCommit   string           `json:"head_commit,omitempty"`
+	Commits      []DelegateCommit `json:"commits,omitempty"`
+}
+
+// DelegateCommit captures generated commits from a delegate worktree.
+type DelegateCommit struct {
+	SHA     string `json:"sha"`
+	Subject string `json:"subject,omitempty"`
+}
+
+// DelegateSummary captures high-level run outcome for delegate mode.
+type DelegateSummary struct {
+	Agent      string
+	Model      string
+	Prompt     string
+	Sandbox    string
+	Duration   time.Duration
+	EventCount int
+	Error      string
+	Worktree   DelegateWorkspace
 }
 
 // Store manages persisting run artifacts to disk.
@@ -57,6 +87,66 @@ func New(baseDir string) (*Store, error) {
 // SaveInput writes the run metadata to input.json.
 func (s *Store) SaveInput(meta RunMeta) error {
 	return s.writeJSON(filepath.Join(s.RunDir, "input.json"), meta)
+}
+
+// SaveDelegateEvent appends one normalized event as JSONL.
+func (s *Store) SaveDelegateEvent(ev agent.Event) error {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("marshal delegate event: %w", err)
+	}
+	return s.appendLine(filepath.Join(s.RunDir, "events.normalized.jsonl"), data)
+}
+
+// SaveDelegateRawLine appends one provider raw line to raw event logs.
+func (s *Store) SaveDelegateRawLine(line []byte) error {
+	return s.appendLine(filepath.Join(s.RunDir, "events.raw.jsonl"), line)
+}
+
+// SaveDelegateStderrLine appends one stderr line.
+func (s *Store) SaveDelegateStderrLine(line []byte) error {
+	return s.appendLine(filepath.Join(s.RunDir, "stderr.log"), line)
+}
+
+// SaveDelegateWorkspace persists optional workspace metadata.
+func (s *Store) SaveDelegateWorkspace(info DelegateWorkspace) error {
+	return s.writeJSON(filepath.Join(s.RunDir, "workspace.json"), info)
+}
+
+// SaveDelegateSummary writes a markdown summary for delegate runs.
+func (s *Store) SaveDelegateSummary(summary DelegateSummary) error {
+	var b strings.Builder
+	b.WriteString("# Tripartite Delegate Summary\n\n")
+	fmt.Fprintf(&b, "**Agent:** %s\n\n", summary.Agent)
+	if summary.Model != "" {
+		fmt.Fprintf(&b, "**Model:** %s\n\n", summary.Model)
+	}
+	if summary.Sandbox != "" {
+		fmt.Fprintf(&b, "**Sandbox:** %s\n\n", summary.Sandbox)
+	}
+	fmt.Fprintf(&b, "**Duration:** %.1fs\n\n", summary.Duration.Seconds())
+	fmt.Fprintf(&b, "**Events:** %d\n\n", summary.EventCount)
+	if summary.Worktree.Enabled {
+		fmt.Fprintf(&b, "**Worktree:** `%s`\n\n", summary.Worktree.WorktreePath)
+		fmt.Fprintf(&b, "**Branch:** `%s`\n\n", summary.Worktree.Branch)
+		if summary.Worktree.BaseCommit != "" {
+			fmt.Fprintf(&b, "**Base Commit:** `%s`\n\n", summary.Worktree.BaseCommit)
+		}
+		if summary.Worktree.HeadCommit != "" {
+			fmt.Fprintf(&b, "**Head Commit:** `%s`\n\n", summary.Worktree.HeadCommit)
+		}
+		if len(summary.Worktree.Commits) > 0 {
+			fmt.Fprintf(&b, "**Generated Commits:** %d\n\n", len(summary.Worktree.Commits))
+		}
+	}
+	if summary.Error != "" {
+		fmt.Fprintf(&b, "**Error:** %s\n\n", summary.Error)
+	}
+	b.WriteString("## Prompt\n\n")
+	b.WriteString(summary.Prompt)
+	b.WriteString("\n")
+
+	return os.WriteFile(filepath.Join(s.RunDir, "summary.md"), []byte(b.String()), 0o644)
 }
 
 // SaveResponse writes a model's response to the appropriate round directory
@@ -160,4 +250,20 @@ func (s *Store) writeJSON(path string, v any) error {
 		return fmt.Errorf("json marshal: %w", err)
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func (s *Store) appendLine(path string, line []byte) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(line); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if _, err := f.Write([]byte("\n")); err != nil {
+		return fmt.Errorf("write newline %s: %w", path, err)
+	}
+	return nil
 }

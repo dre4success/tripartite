@@ -23,10 +23,10 @@ func (c *CodexAgent) CheckInstalled() error {
 }
 
 func (c *CodexAgent) SupportedModels() []string {
-	return []string{"o3", "o4-mini", "codex"}
+	return []string{"o3", "o4-mini", "o4mini", "codex"}
 }
 
-func (c *CodexAgent) DefaultModel() string { return "o3" }
+func (c *CodexAgent) DefaultModel() string   { return "o3" }
 func (c *CodexAgent) PromptMode() PromptMode { return PromptArg }
 
 func (c *CodexAgent) BlockedEnvVars() []string {

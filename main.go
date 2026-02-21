@@ -5,14 +5,18 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/dre4success/tripartite/adapter"
+	"github.com/dre4success/tripartite/agent"
+	"github.com/dre4success/tripartite/delegate"
 	"github.com/dre4success/tripartite/orchestrator"
 	"github.com/dre4success/tripartite/preflight"
 	"github.com/dre4success/tripartite/session"
 	"github.com/dre4success/tripartite/store"
+	"github.com/dre4success/tripartite/workspace"
 )
 
 func main() {
@@ -24,11 +28,105 @@ func main() {
 	switch os.Args[1] {
 	case "brainstorm":
 		runBrainstorm(os.Args[2:])
+	case "delegate":
+		runDelegate(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n\n", os.Args[1])
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func runDelegate(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: tripartite delegate <agent> \"<prompt>\" [flags]")
+		os.Exit(1)
+	}
+
+	agentName := strings.TrimSpace(args[0])
+	prompt := strings.TrimSpace(args[1])
+	if prompt == "" {
+		fmt.Fprintln(os.Stderr, "Error: prompt must not be empty")
+		os.Exit(1)
+	}
+
+	fs := flag.NewFlagSet("delegate", flag.ExitOnError)
+	model := fs.String("model", "", "Model alias or ID for the selected agent")
+	sandbox := fs.String("sandbox", "safe", "Sandbox level: safe|write|full")
+	timeout := fs.Duration("timeout", 10*time.Minute, "Delegate execution timeout")
+	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
+	worktreeEnabled := fs.Bool("worktree", false, "Run delegate task in an isolated git worktree")
+	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
+	fs.Parse(args[2:])
+
+	factory, ok := agent.Registry[agentName]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: unknown agent %q (available: claude, codex, gemini)\n", agentName)
+		os.Exit(1)
+	}
+
+	fmt.Println("Running delegate preflight checks...")
+	result, err := preflight.CheckAgents([]agent.Agent{factory()}, *allowAPIKeys, 1)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Preflight failed: %v\n", err)
+		os.Exit(1)
+	}
+	a := result.Ready[0]
+	fmt.Printf("  [ready] %s\n\n", a.Name())
+
+	s, err := store.New(*runsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create run directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	runCwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to determine working directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	var wsInfo store.DelegateWorkspace
+	if *worktreeEnabled {
+		if err := preflight.CheckWorktreePrereqs(ctx, runCwd); err != nil {
+			fmt.Fprintf(os.Stderr, "Preflight failed: %v\n", err)
+			os.Exit(1)
+		}
+		taskID := filepath.Base(s.RunDir)
+		info, err := workspace.Prepare(ctx, runCwd, taskID, a.Name())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to prepare worktree: %v\n", err)
+			os.Exit(1)
+		}
+		wsInfo = store.DelegateWorkspace{
+			Enabled:      true,
+			TaskID:       info.TaskID,
+			WorktreePath: info.WorktreePath,
+			Branch:       info.Branch,
+			BaseCommit:   info.BaseCommit,
+		}
+		runCwd = info.WorktreePath
+		fmt.Printf("Using worktree: %s\n", runCwd)
+	}
+
+	fmt.Printf("Delegating to %s...\n\n", a.Name())
+	if err := delegate.Run(ctx, delegate.Config{
+		Agent:    a,
+		Prompt:   prompt,
+		Model:    *model,
+		Sandbox:  *sandbox,
+		Timeout:  *timeout,
+		Cwd:      runCwd,
+		Store:    s,
+		Worktree: wsInfo,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "\nDelegate error: %v\n", err)
+		fmt.Printf("Run artifacts saved to: %s\n", s.RunDir)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\nRun artifacts saved to: %s\n", s.RunDir)
 }
 
 func runBrainstorm(args []string) {
@@ -148,16 +246,26 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  tripartite brainstorm -p \"your prompt here\" [flags]   # one-shot mode")
 	fmt.Fprintln(os.Stderr, "  tripartite brainstorm [flags]                         # interactive mode")
+	fmt.Fprintln(os.Stderr, "  tripartite delegate <agent> \"<prompt>\" [flags]       # streaming delegate mode")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Subcommands:")
 	fmt.Fprintln(os.Stderr, "  brainstorm  Send a prompt to multiple AI CLIs for collaborative analysis")
+	fmt.Fprintln(os.Stderr, "  delegate    Send one task to one agent with live event streaming")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Flags:")
+	fmt.Fprintln(os.Stderr, "Brainstorm Flags:")
 	fmt.Fprintln(os.Stderr, "  -p string          The prompt to send (omit for interactive mode)")
 	fmt.Fprintln(os.Stderr, "  --timeout duration  Per-model execution timeout (default 120s)")
 	fmt.Fprintln(os.Stderr, "  --allow-api-keys   Don't fail if API key env vars are set")
 	fmt.Fprintln(os.Stderr, "  --models string    Comma-separated models (default \"claude,codex,gemini\")")
 	fmt.Fprintln(os.Stderr, "  --runs-dir string  Directory for run artifacts (default \"./runs\")")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Delegate Flags:")
+	fmt.Fprintln(os.Stderr, "  --model string      Model alias or ID for selected agent")
+	fmt.Fprintln(os.Stderr, "  --sandbox string    Sandbox level: safe|write|full (default \"safe\")")
+	fmt.Fprintln(os.Stderr, "  --worktree          Run in isolated git worktree")
+	fmt.Fprintln(os.Stderr, "  --timeout duration  Delegate timeout (default 10m)")
+	fmt.Fprintln(os.Stderr, "  --allow-api-keys    Don't fail if API key env vars are set")
+	fmt.Fprintln(os.Stderr, "  --runs-dir string   Directory for run artifacts (default \"./runs\")")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Interactive commands:")
 	fmt.Fprintln(os.Stderr, "  /quit, /exit       End the session")

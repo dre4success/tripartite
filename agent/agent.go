@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -89,9 +90,10 @@ var ModelAliases = map[string]map[string]string{
 		"haiku":  "claude-haiku-4-5-20251001",
 	},
 	"codex": {
-		"o3":     "o3",
+		"o3":      "o3",
+		"o4mini":  "o4-mini",
 		"o4-mini": "o4-mini",
-		"codex":  "codex-mini-latest",
+		"codex":   "codex-mini-latest",
 	},
 	"gemini": {
 		"2.5-pro":   "gemini-2.5-pro",
@@ -103,8 +105,9 @@ var ModelAliases = map[string]map[string]string{
 // ResolveModel returns the full model ID for an alias, or the input unchanged
 // if no alias matches.
 func ResolveModel(agentName, alias string) string {
+	key := strings.ToLower(strings.TrimSpace(alias))
 	if aliases, ok := ModelAliases[agentName]; ok {
-		if full, ok := aliases[alias]; ok {
+		if full, ok := aliases[key]; ok {
 			return full
 		}
 	}

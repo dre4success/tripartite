@@ -3,26 +3,27 @@
 **Source spec:** `specs/v2-meta-agent.md`  
 **Scope:** v2.0 only (streaming `delegate` + safe foundations)
 **Date:** 2026-02-21
+**Note:** Checked boxes in sections 1-3 indicate implementation landed; verification remains tracked in sections 4-5.
 
 ---
 
 ## 1. v2.0 Goals
 
-- [ ] Add `tripartite delegate <agent> "<prompt>"` with live event streaming.
-- [ ] Keep existing `brainstorm` behavior working.
-- [ ] Persist replayable artifacts (normalized events + raw provider lines + stderr).
-- [ ] Support opt-in workspace isolation via `--worktree` flag.
-- [ ] Guarantee clean cancellation (Ctrl+C) with no orphan subprocesses.
+- [x] Add `tripartite delegate <agent> "<prompt>"` with live event streaming.
+- [x] Keep existing `brainstorm` behavior working.
+- [x] Persist replayable artifacts (normalized events + raw provider lines + stderr).
+- [x] Support opt-in workspace isolation via `--worktree` flag.
+- [x] Guarantee clean cancellation (Ctrl+C) with no orphan subprocesses.
 
 ---
 
 ## 2. Package Plan
 
 ### CLI Layer (`main.go`)
-- [ ] Add `delegate` subcommand and flags:
-  - [ ] `--model`, `--sandbox`, `--worktree`, `--timeout`, `--runs-dir`
-- [ ] Route existing `brainstorm` path unchanged.
-- [ ] Validate agent name and resolve adapter.
+- [x] Add `delegate` subcommand and flags:
+  - [x] `--model`, `--sandbox`, `--worktree`, `--timeout`, `--runs-dir`
+- [x] Route existing `brainstorm` path unchanged.
+- [x] Validate agent name and resolve adapter.
 
 ### Agent Layer (`agent/`)
 - [x] Create `Agent` interface (streaming-first):
@@ -43,72 +44,72 @@
 - [x] Wire `agent/` into runtime (`delegate` subcommand) — deferred to CLI Layer step; package is scaffolding-only for now.
 
 ### Stream Runner (`stream/`)
-- [ ] Implement subprocess runner with:
-  - [ ] `StdoutPipe` parsing loop
-  - [ ] separate stderr capture/persist
-  - [ ] scanner buffer size override for large JSON lines
-  - [ ] context-aware cancel path
-  - [ ] graceful interrupt then forced kill fallback
-- [ ] Handle prompt transport by `PromptMode`.
-- [ ] Preserve unknown/unparseable lines in raw logs.
+- [x] Implement subprocess runner with:
+  - [x] `StdoutPipe` parsing loop
+  - [x] separate stderr capture/persist
+  - [x] scanner buffer size override for large JSON lines
+  - [x] context-aware cancel path
+  - [x] graceful interrupt then forced kill fallback
+- [x] Handle prompt transport by `PromptMode`.
+- [x] Preserve unknown/unparseable lines in raw logs.
 
 ### Display (`display/`)
-- [ ] Add terminal renderer for normalized events.
-- [ ] Show minimal useful event classes:
-  - [ ] text
-  - [ ] tool use/result
-  - [ ] command
-  - [ ] done/error
+- [x] Add terminal renderer for normalized events.
+- [x] Show minimal useful event classes:
+  - [x] text
+  - [x] tool use/result
+  - [x] command
+  - [x] done/error
 
 ### Workspace Isolation (`workspace/` or `delegate/`) — opt-in via `--worktree`
-- [ ] When `--worktree` is passed:
-  - [ ] Create task-scoped worktree: `.tripartite/worktrees/<task-id>-<agent>/`
-  - [ ] Create agent branch: `tripartite/<task-id>/<agent>`
-  - [ ] Run delegate in isolated cwd.
-  - [ ] Record branch/worktree/commit metadata in artifacts (`workspace.json`).
-- [ ] When `--worktree` is omitted:
-  - [ ] Run delegate in the current working directory (default for v2.0).
-  - [ ] Skip worktree/branch creation; no `workspace.json` artifact.
+- [x] When `--worktree` is passed:
+  - [x] Create task-scoped worktree: `.tripartite/worktrees/<task-id>-<agent>/`
+  - [x] Create agent branch: `tripartite/<task-id>/<agent>`
+  - [x] Run delegate in isolated cwd.
+  - [x] Record branch/worktree/commit metadata in artifacts (`workspace.json`).
+- [x] When `--worktree` is omitted:
+  - [x] Run delegate in the current working directory (default for v2.0).
+  - [x] Skip worktree/branch creation; no `workspace.json` artifact.
 
 ### Store (`store/`)
-- [ ] Add delegate run artifact schema:
-  - [ ] `input.json`
-  - [ ] `events.normalized.jsonl`
-  - [ ] `events.raw.jsonl`
-  - [ ] `stderr.log`
-  - [ ] `summary.md`
-  - [ ] `workspace.json` (worktree/branch/commits)
-- [ ] Ensure partial artifacts are flushed on cancellation/failure.
+- [x] Add delegate run artifact schema:
+  - [x] `input.json`
+  - [x] `events.normalized.jsonl`
+  - [x] `events.raw.jsonl`
+  - [x] `stderr.log`
+  - [x] `summary.md`
+  - [x] `workspace.json` (worktree/branch/commits)
+- [x] Ensure partial artifacts are flushed on cancellation/failure.
 
 ### Preflight (`preflight/`)
-- [ ] Add delegate preflight:
-  - [ ] binary presence
-  - [ ] workspace prerequisites (git repo/worktree support)
-  - [ ] env-var warnings per provider policy
+- [x] Add delegate preflight:
+  - [x] binary presence
+  - [x] workspace prerequisites (git repo/worktree support)
+  - [x] env-var warnings per provider policy
 
 ---
 
 ## 3. Behavior Contracts
 
 ### Prompt Transport
-- [ ] `PromptArg` when safe and short.
+- [x] `PromptArg` when safe and short.
 - [ ] `PromptStdin` supported and tested.
-- [ ] `PromptTempFile` fallback path defined.
+- [x] `PromptTempFile` fallback path defined.
 
 ### Event Fidelity
-- [ ] Every parsed event includes provider raw payload.
-- [ ] Unknown JSONL lines are not dropped.
+- [x] Every parsed event includes provider raw payload.
+- [x] Unknown JSONL lines are not dropped.
 
 ### Cancellation
-- [ ] Ctrl+C behavior:
-  - [ ] send interrupt
-  - [ ] wait grace period
-  - [ ] hard kill if still running
-  - [ ] persist partial output
+- [x] Ctrl+C behavior:
+  - [x] send interrupt
+  - [x] wait grace period
+  - [x] hard kill if still running
+  - [x] persist partial output
 
 ### Safety
-- [ ] When `--worktree` is active, no direct modifications to main branch.
-- [ ] When `--worktree` is omitted, delegate runs in cwd (user accepts responsibility).
+- [x] When `--worktree` is active, no direct modifications to main branch.
+- [x] When `--worktree` is omitted, delegate runs in cwd (user accepts responsibility).
 - [ ] Applying worktree results is manual for v2.0 (cherry-pick/merge). `tripartite apply` ships in v2.1.
 
 ---
@@ -153,4 +154,3 @@
 - [ ] Automatic crash failover to another agent
 - [ ] Advanced sandbox normalization across providers
 - [ ] Full interactive `/use` + inline delegate/brainstorm unification
-
