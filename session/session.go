@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dre4success/tripartite/adapter"
+	"github.com/dre4success/tripartite/logger"
 	"github.com/dre4success/tripartite/orchestrator"
 	"github.com/dre4success/tripartite/store"
 )
@@ -18,6 +19,7 @@ type Config struct {
 	Adapters []adapter.Adapter
 	Timeout  time.Duration
 	Store    *store.Store
+	Logger   *logger.Logger
 }
 
 // Start runs the interactive REPL loop. It reads prompts from stdin, runs the
@@ -73,6 +75,7 @@ func Start(ctx context.Context, cfg Config) error {
 			Store:    cfg.Store,
 			History:  turns,
 			TurnNum:  turnNum,
+			Logger:   cfg.Logger,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Orchestration error: %v\n", err)

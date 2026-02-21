@@ -12,6 +12,7 @@ import (
 	"github.com/dre4success/tripartite/adapter"
 	"github.com/dre4success/tripartite/agent"
 	"github.com/dre4success/tripartite/delegate"
+	"github.com/dre4success/tripartite/logger"
 	"github.com/dre4success/tripartite/orchestrator"
 	"github.com/dre4success/tripartite/preflight"
 	"github.com/dre4success/tripartite/session"
@@ -137,8 +138,10 @@ func runBrainstorm(args []string) {
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
 	models := fs.String("models", "claude,codex,gemini", "Comma-separated list of models to use")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
+	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
 
 	fs.Parse(args)
+	log := logger.New(*debug)
 
 	// Resolve adapters from model names.
 	modelNames := strings.Split(*models, ",")
@@ -202,6 +205,7 @@ func runBrainstorm(args []string) {
 			Adapters: result.Ready,
 			Timeout:  *timeout,
 			Store:    s,
+			Logger:   log,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
 			os.Exit(1)
@@ -227,6 +231,7 @@ func runBrainstorm(args []string) {
 		Adapters: result.Ready,
 		Timeout:  *timeout,
 		Store:    s,
+		Logger:   log,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Orchestration error: %v\n", err)
@@ -257,6 +262,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --timeout duration  Per-model execution timeout (default 120s)")
 	fmt.Fprintln(os.Stderr, "  --allow-api-keys   Don't fail if API key env vars are set")
 	fmt.Fprintln(os.Stderr, "  --models string    Comma-separated models (default \"claude,codex,gemini\")")
+	fmt.Fprintln(os.Stderr, "  --debug            Print structured diagnostics to stderr")
 	fmt.Fprintln(os.Stderr, "  --runs-dir string  Directory for run artifacts (default \"./runs\")")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Delegate Flags:")
