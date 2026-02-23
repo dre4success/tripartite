@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-type Gemini struct{}
+type Gemini struct {
+	ModelID string
+}
 
 func (g *Gemini) Name() string       { return "gemini" }
 func (g *Gemini) BinaryName() string { return "gemini" }
@@ -24,8 +26,14 @@ func (g *Gemini) BlockedEnvVars() []string {
 	return []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
 }
 
+func (g *Gemini) SetModel(id string) { g.ModelID = id }
+
 func (g *Gemini) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
 	args := []string{"-p", prompt, "--output-format", "json"}
+
+	if g.ModelID != "" {
+		args = append(args, "--model", g.ModelID)
+	}
 
 	switch approval {
 	case ApprovalRead:

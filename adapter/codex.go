@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-type Codex struct{}
+type Codex struct {
+	ModelID string
+}
 
 func (c *Codex) Name() string       { return "codex" }
 func (c *Codex) BinaryName() string { return "codex" }
@@ -24,8 +26,14 @@ func (c *Codex) BlockedEnvVars() []string {
 	return []string{"CODEX_API_KEY", "OPENAI_API_KEY"}
 }
 
+func (c *Codex) SetModel(id string) { c.ModelID = id }
+
 func (c *Codex) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
 	args := []string{"exec", prompt, "--json"}
+
+	if c.ModelID != "" {
+		args = append(args, "-m", c.ModelID)
+	}
 
 	switch approval {
 	case ApprovalRead:

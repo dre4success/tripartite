@@ -27,6 +27,7 @@ type Adapter interface {
 	BinaryName() string
 	CheckInstalled() error
 	BlockedEnvVars() []string
+	SetModel(modelID string)
 	BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd
 	ParseResponse(stdout []byte) (string, error)
 	ExtractModel(stdout []byte) string

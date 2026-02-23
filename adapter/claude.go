@@ -6,7 +6,9 @@ import (
 	"os/exec"
 )
 
-type Claude struct{}
+type Claude struct {
+	ModelID string
+}
 
 func (c *Claude) Name() string       { return "claude" }
 func (c *Claude) BinaryName() string { return "claude" }
@@ -23,8 +25,14 @@ func (c *Claude) BlockedEnvVars() []string {
 	return []string{"ANTHROPIC_API_KEY"}
 }
 
+func (c *Claude) SetModel(id string) { c.ModelID = id }
+
 func (c *Claude) BuildCommand(prompt string, approval ApprovalLevel) *exec.Cmd {
 	args := []string{"-p", prompt, "--output-format", "json"}
+
+	if c.ModelID != "" {
+		args = append(args, "--model", c.ModelID)
+	}
 
 	switch approval {
 	case ApprovalRead:

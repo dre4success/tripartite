@@ -104,7 +104,7 @@ func Run(ctx context.Context, a agent.Agent, prompt string, opts agent.StreamOpt
 			if !ok {
 				stdoutClosed = true
 				stdoutLines = nil
-				if err := <-stdoutErr; err != nil && procErr == nil {
+				if err := <-stdoutErr; err != nil && procErr == nil && !procDone {
 					procErr = fmt.Errorf("stdout scan: %w", err)
 				}
 				continue
@@ -126,7 +126,7 @@ func Run(ctx context.Context, a agent.Agent, prompt string, opts agent.StreamOpt
 			if !ok {
 				stderrClosed = true
 				stderrLines = nil
-				if err := <-stderrErr; err != nil && procErr == nil {
+				if err := <-stderrErr; err != nil && procErr == nil && !procDone {
 					procErr = fmt.Errorf("stderr scan: %w", err)
 				}
 				continue

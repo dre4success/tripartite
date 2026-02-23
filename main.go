@@ -11,6 +11,7 @@ import (
 
 	"github.com/dre4success/tripartite/adapter"
 	"github.com/dre4success/tripartite/agent"
+	"github.com/dre4success/tripartite/models"
 	"github.com/dre4success/tripartite/delegate"
 	"github.com/dre4success/tripartite/logger"
 	"github.com/dre4success/tripartite/orchestrator"
@@ -139,7 +140,7 @@ func runBrainstorm(args []string) {
 	timeout := fs.Duration("timeout", 5*time.Minute, "Per-model execution timeout")
 	approval := fs.String("approval", "edit", "Approval mode for brainstorm tool actions: read|edit|full")
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
-	models := fs.String("models", "claude,codex,gemini", "Comma-separated list of models to use")
+	modelList := fs.String("models", "claude,codex,gemini", "Comma-separated list of agent:model specs (e.g. claude:opus,codex:o3,gemini:3-flash)")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
 
@@ -153,17 +154,24 @@ func runBrainstorm(args []string) {
 		os.Exit(1)
 	}
 
-	// Resolve adapters from model names.
-	modelNames := strings.Split(*models, ",")
+	// Resolve adapters from model specs (e.g. "claude:opus", "codex", "gemini:3-flash").
 	var adapters []adapter.Adapter
-	for _, name := range modelNames {
-		name = strings.TrimSpace(name)
+	for _, spec := range strings.Split(*modelList, ",") {
+		spec = strings.TrimSpace(spec)
+		parts := strings.SplitN(spec, ":", 2)
+		name := parts[0]
+
 		factory, ok := adapter.Registry[name]
 		if !ok {
 			fmt.Fprintf(os.Stderr, "Error: unknown model %q (available: claude, codex, gemini)\n", name)
 			os.Exit(1)
 		}
-		adapters = append(adapters, factory())
+		a := factory()
+		if len(parts) == 2 {
+			resolved := models.ResolveModel(name, parts[1])
+			a.SetModel(resolved)
+		}
+		adapters = append(adapters, a)
 	}
 
 	// Determine minimum models: 2 if multiple requested, 1 if single.
@@ -274,7 +282,8 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --timeout duration  Per-model execution timeout (default 5m)")
 	fmt.Fprintln(os.Stderr, "  --approval string  Approval mode for tool actions: read|edit|full (default \"edit\")")
 	fmt.Fprintln(os.Stderr, "  --allow-api-keys   Don't fail if API key env vars are set")
-	fmt.Fprintln(os.Stderr, "  --models string    Comma-separated models (default \"claude,codex,gemini\")")
+	fmt.Fprintln(os.Stderr, "  --models string    Comma-separated agent:model specs (default \"claude,codex,gemini\")")
+	fmt.Fprintln(os.Stderr, "                     e.g. claude:opus,codex:o3,gemini:3-flash")
 	fmt.Fprintln(os.Stderr, "  --debug            Print structured diagnostics to stderr")
 	fmt.Fprintln(os.Stderr, "  --runs-dir string  Directory for run artifacts (default \"./runs\")")
 	fmt.Fprintln(os.Stderr, "")
