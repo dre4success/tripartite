@@ -11,9 +11,10 @@ import (
 
 	"github.com/dre4success/tripartite/adapter"
 	"github.com/dre4success/tripartite/agent"
-	"github.com/dre4success/tripartite/models"
 	"github.com/dre4success/tripartite/delegate"
 	"github.com/dre4success/tripartite/logger"
+	"github.com/dre4success/tripartite/meta"
+	"github.com/dre4success/tripartite/models"
 	"github.com/dre4success/tripartite/orchestrator"
 	"github.com/dre4success/tripartite/preflight"
 	"github.com/dre4success/tripartite/session"
@@ -23,8 +24,9 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		// No args → interactive meta session.
+		runMeta(nil, nil)
+		return
 	}
 
 	switch os.Args[1] {
@@ -33,8 +35,179 @@ func main() {
 	case "delegate":
 		runDelegate(os.Args[2:])
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n\n", os.Args[1])
-		printUsage()
+		if strings.HasPrefix(os.Args[1], "-") {
+			// Starts with flag → interactive mode with flags.
+			runMeta(nil, os.Args[1:])
+		} else {
+			// Not a subcommand → treat as one-shot prompt.
+			prompt := os.Args[1]
+			runMeta(&prompt, os.Args[2:])
+		}
+	}
+}
+
+func runMeta(prompt *string, args []string) {
+	fs := flag.NewFlagSet("meta", flag.ExitOnError)
+
+	timeout := fs.Duration("timeout", 5*time.Minute, "Execution timeout")
+	approval := fs.String("approval", "edit", "Approval mode: read|edit|full")
+	modelList := fs.String("models", "claude,codex,gemini", "Adapters for brainstorm (comma-separated, colon model specs)")
+	agentList := fs.String("agents", "claude", "Agents for delegate (comma-separated)")
+	defaultAgent := fs.String("default-agent", "claude", "Default delegate agent")
+	sandbox := fs.String("sandbox", "safe", "Delegate sandbox: safe|write|full")
+	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
+	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
+	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
+
+	if args != nil {
+		if err := fs.Parse(args); err != nil {
+			os.Exit(1)
+		}
+	}
+	log := logger.New(*debug)
+
+	approvalLevel, err := adapter.ParseApprovalLevel(*approval)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Build adapters from --models.
+	var adapters []adapter.Adapter
+	for _, spec := range strings.Split(*modelList, ",") {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+		parts := strings.SplitN(spec, ":", 2)
+		name := parts[0]
+
+		factory, ok := adapter.Registry[name]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "Error: unknown model %q (available: claude, codex, gemini)\n", name)
+			os.Exit(1)
+		}
+		a := factory()
+		if len(parts) == 2 {
+			resolved := models.ResolveModel(name, parts[1])
+			a.SetModel(resolved)
+		}
+		adapters = append(adapters, a)
+	}
+
+	// Build agents from --agents.
+	var agents []agent.Agent
+	for _, name := range strings.Split(*agentList, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		factory, ok := agent.Registry[name]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "Error: unknown agent %q (available: claude, codex, gemini)\n", name)
+			os.Exit(1)
+		}
+		agents = append(agents, factory())
+	}
+
+	// Unified preflight: need at least 1 adapter or 1 agent.
+	fmt.Println("Running preflight checks...")
+	unified, err := preflight.CheckAll(adapters, agents, *allowAPIKeys)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Preflight failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	for name, reason := range unified.Adapters.Skipped {
+		fmt.Printf("  [skip] adapter %s: %s\n", name, reason)
+	}
+	for name, reason := range unified.Agents.Skipped {
+		fmt.Printf("  [skip] agent %s: %s\n", name, reason)
+	}
+	if len(unified.AdapterNames) > 0 {
+		fmt.Printf("  [ready] adapters: %s\n", strings.Join(unified.AdapterNames, ", "))
+	}
+	if len(unified.AgentNames) > 0 {
+		fmt.Printf("  [ready] agents: %s\n", strings.Join(unified.AgentNames, ", "))
+	}
+	fmt.Println()
+
+	// Initialize artifact store.
+	s, err := store.New(*runsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create run directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+
+	cfg := meta.Config{
+		Adapters:     unified.Adapters.Ready,
+		Approval:     approvalLevel,
+		Agents:       unified.Agents.Ready,
+		Sandbox:      *sandbox,
+		Timeout:      *timeout,
+		Store:        s,
+		Logger:       log,
+		DefaultAgent: *defaultAgent,
+	}
+
+	if prompt != nil {
+		// One-shot mode.
+		allModels := append(unified.AdapterNames, unified.AgentNames...)
+		inputMeta := store.RunMeta{
+			Prompt:    *prompt,
+			Models:    allModels,
+			Timeout:   timeout.String(),
+			Timestamp: time.Now().Format(time.RFC3339),
+			Mode:      "meta-oneshot",
+		}
+		if err := s.SaveInput(inputMeta); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to save input metadata: %v\n", err)
+			os.Exit(1)
+		}
+
+		turn, err := meta.RunOnce(ctx, cfg, *prompt, nil, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Printf("Run artifacts saved to: %s\n", s.RunDir)
+			os.Exit(1)
+		}
+
+		// Save single-turn meta session summary.
+		var st store.MetaSessionTurn
+		st.Prompt = turn.Prompt
+		if turn.Brainstorm != nil {
+			st.Engine = "brainstorm"
+			st.Responses = turn.Brainstorm.Rounds
+		} else if turn.Delegate != nil {
+			st.Engine = "delegate"
+			st.Agent = turn.Delegate.Agent
+			st.FinalText = turn.Delegate.FinalText
+		}
+		if err := s.SaveMetaSessionSummary(inputMeta, []store.MetaSessionTurn{st}); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save summary: %v\n", err)
+		}
+
+		fmt.Printf("\nRun artifacts saved to: %s\n", s.RunDir)
+		return
+	}
+
+	// Interactive mode.
+	allModels := append(unified.AdapterNames, unified.AgentNames...)
+	inputMeta := store.RunMeta{
+		Models:    allModels,
+		Timeout:   timeout.String(),
+		Timestamp: time.Now().Format(time.RFC3339),
+		Mode:      "meta-interactive",
+	}
+	if err := s.SaveInput(inputMeta); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save input metadata: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := meta.Start(ctx, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -233,14 +406,14 @@ func runBrainstorm(args []string) {
 	}
 
 	// One-shot mode: run single prompt and exit.
-	meta := store.RunMeta{
+	inputMeta := store.RunMeta{
 		Prompt:    *prompt,
 		Models:    readyNames,
 		Timeout:   timeout.String(),
 		Timestamp: time.Now().Format(time.RFC3339),
 		Mode:      "one-shot",
 	}
-	if err := s.SaveInput(meta); err != nil {
+	if err := s.SaveInput(inputMeta); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to save input metadata: %v\n", err)
 		os.Exit(1)
 	}
@@ -258,7 +431,7 @@ func runBrainstorm(args []string) {
 		os.Exit(1)
 	}
 
-	if err := s.SaveSummary(meta, allRounds); err != nil {
+	if err := s.SaveSummary(inputMeta, allRounds); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to save summary: %v\n", err)
 	}
 
@@ -266,36 +439,46 @@ func runBrainstorm(args []string) {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "Tripartite — Multi-LLM Orchestrator CLI")
+	fmt.Fprintln(os.Stderr, "Tripartite — Meta-Agent Shell")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  tripartite brainstorm -p \"your prompt here\" [flags]   # one-shot mode")
-	fmt.Fprintln(os.Stderr, "  tripartite brainstorm [flags]                         # interactive mode")
-	fmt.Fprintln(os.Stderr, "  tripartite delegate <agent> \"<prompt>\" [flags]       # streaming delegate mode")
+	fmt.Fprintln(os.Stderr, "  tripartite                                Interactive meta session")
+	fmt.Fprintln(os.Stderr, "  tripartite \"<prompt>\" [flags]              One-shot auto mode")
+	fmt.Fprintln(os.Stderr, "  tripartite brainstorm -p \"...\" [flags]     Multi-agent brainstorm (advanced)")
+	fmt.Fprintln(os.Stderr, "  tripartite delegate <agent> \"...\" [flags]  Single-agent delegate (advanced)")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Subcommands:")
-	fmt.Fprintln(os.Stderr, "  brainstorm  Send a prompt to multiple AI CLIs for collaborative analysis")
-	fmt.Fprintln(os.Stderr, "  delegate    Send one task to one agent with live event streaming")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Brainstorm Flags:")
-	fmt.Fprintln(os.Stderr, "  -p string          The prompt to send (omit for interactive mode)")
-	fmt.Fprintln(os.Stderr, "  --timeout duration  Per-model execution timeout (default 5m)")
-	fmt.Fprintln(os.Stderr, "  --approval string  Approval mode for tool actions: read|edit|full (default \"edit\")")
-	fmt.Fprintln(os.Stderr, "  --allow-api-keys   Don't fail if API key env vars are set")
-	fmt.Fprintln(os.Stderr, "  --models string    Comma-separated agent:model specs (default \"claude,codex,gemini\")")
-	fmt.Fprintln(os.Stderr, "                     e.g. claude:opus,codex:o3,gemini:3-flash")
-	fmt.Fprintln(os.Stderr, "  --debug            Print structured diagnostics to stderr")
-	fmt.Fprintln(os.Stderr, "  --runs-dir string  Directory for run artifacts (default \"./runs\")")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Delegate Flags:")
-	fmt.Fprintln(os.Stderr, "  --model string      Model alias or ID for selected agent")
-	fmt.Fprintln(os.Stderr, "  --sandbox string    Sandbox level: safe|write|full (default \"safe\")")
-	fmt.Fprintln(os.Stderr, "  --worktree          Run in isolated git worktree")
-	fmt.Fprintln(os.Stderr, "  --timeout duration  Delegate timeout (default 10m)")
-	fmt.Fprintln(os.Stderr, "  --allow-api-keys    Don't fail if API key env vars are set")
-	fmt.Fprintln(os.Stderr, "  --runs-dir string   Directory for run artifacts (default \"./runs\")")
+	fmt.Fprintln(os.Stderr, "Meta Session Flags:")
+	fmt.Fprintln(os.Stderr, "  --timeout duration      Execution timeout (default 5m)")
+	fmt.Fprintln(os.Stderr, "  --approval string       Approval mode: read|edit|full (default \"edit\")")
+	fmt.Fprintln(os.Stderr, "  --models string         Adapters for brainstorm (default \"claude,codex,gemini\")")
+	fmt.Fprintln(os.Stderr, "  --agents string         Agents for delegate (default \"claude\")")
+	fmt.Fprintln(os.Stderr, "  --default-agent string  Default delegate agent (default \"claude\")")
+	fmt.Fprintln(os.Stderr, "  --sandbox string        Delegate sandbox: safe|write|full (default \"safe\")")
+	fmt.Fprintln(os.Stderr, "  --runs-dir string       Directory for run artifacts (default \"./runs\")")
+	fmt.Fprintln(os.Stderr, "  --debug                 Print structured diagnostics to stderr")
+	fmt.Fprintln(os.Stderr, "  --allow-api-keys        Don't fail if API key env vars are set")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Interactive commands:")
-	fmt.Fprintln(os.Stderr, "  /quit, /exit       End the session")
-	fmt.Fprintln(os.Stderr, "  /history           Show conversation turn count")
+	fmt.Fprintln(os.Stderr, "  /brainstorm <prompt>        Force multi-agent brainstorm")
+	fmt.Fprintln(os.Stderr, "  /delegate [agent] <prompt>  Force single-agent delegate")
+	fmt.Fprintln(os.Stderr, "  /history                    Show turn summaries")
+	fmt.Fprintln(os.Stderr, "  /help                       Show available commands")
+	fmt.Fprintln(os.Stderr, "  /quit, /exit                End session")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Brainstorm Flags:")
+	fmt.Fprintln(os.Stderr, "  -p string               The prompt to send (omit for interactive mode)")
+	fmt.Fprintln(os.Stderr, "  --timeout duration      Per-model execution timeout (default 5m)")
+	fmt.Fprintln(os.Stderr, "  --approval string       Approval mode for tool actions: read|edit|full (default \"edit\")")
+	fmt.Fprintln(os.Stderr, "  --allow-api-keys        Don't fail if API key env vars are set")
+	fmt.Fprintln(os.Stderr, "  --models string         Comma-separated agent:model specs (default \"claude,codex,gemini\")")
+	fmt.Fprintln(os.Stderr, "  --debug                 Print structured diagnostics to stderr")
+	fmt.Fprintln(os.Stderr, "  --runs-dir string       Directory for run artifacts (default \"./runs\")")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Delegate Flags:")
+	fmt.Fprintln(os.Stderr, "  --model string          Model alias or ID for selected agent")
+	fmt.Fprintln(os.Stderr, "  --sandbox string        Sandbox level: safe|write|full (default \"safe\")")
+	fmt.Fprintln(os.Stderr, "  --worktree              Run in isolated git worktree")
+	fmt.Fprintln(os.Stderr, "  --timeout duration      Delegate timeout (default 10m)")
+	fmt.Fprintln(os.Stderr, "  --allow-api-keys        Don't fail if API key env vars are set")
+	fmt.Fprintln(os.Stderr, "  --runs-dir string       Directory for run artifacts (default \"./runs\")")
 }

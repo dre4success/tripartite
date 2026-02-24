@@ -244,6 +244,65 @@ func (s *Store) SaveSessionSummary(meta RunMeta, turns []SessionTurn) error {
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
+// MetaSessionTurn captures one turn of a meta session (either engine).
+type MetaSessionTurn struct {
+	Prompt    string               `json:"prompt"`
+	Engine    string               `json:"engine"`              // "brainstorm" or "delegate"
+	Agent     string               `json:"agent,omitempty"`     // delegate agent name
+	Responses [][]adapter.Response `json:"responses,omitempty"` // brainstorm rounds
+	FinalText string               `json:"final_text,omitempty"` // delegate collected text
+}
+
+// SaveMetaSessionSummary writes a summary.md for a meta session with mixed engine turns.
+func (s *Store) SaveMetaSessionSummary(meta RunMeta, turns []MetaSessionTurn) error {
+	var b strings.Builder
+
+	b.WriteString("# Tripartite Meta Session Summary\n\n")
+	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(meta.Models, ", "))
+	fmt.Fprintf(&b, "**Timestamp:** %s\n\n", meta.Timestamp)
+	fmt.Fprintf(&b, "**Turns:** %d\n\n", len(turns))
+	b.WriteString("---\n\n")
+
+	roundNames := []string{"Initial Response", "Cross-Review", "Synthesis"}
+	for ti, turn := range turns {
+		fmt.Fprintf(&b, "## Turn %d\n\n", ti+1)
+		fmt.Fprintf(&b, "**Prompt:** %s\n\n", turn.Prompt)
+		fmt.Fprintf(&b, "**Engine:** %s\n\n", turn.Engine)
+
+		if turn.Engine == "brainstorm" && len(turn.Responses) > 0 {
+			for ri, responses := range turn.Responses {
+				roundLabel := fmt.Sprintf("Round %d", ri+1)
+				if ri < len(roundNames) {
+					roundLabel += " — " + roundNames[ri]
+				}
+				fmt.Fprintf(&b, "### %s\n\n", roundLabel)
+
+				for _, resp := range responses {
+					fmt.Fprintf(&b, "#### %s (%.1fs)\n\n", resp.Model, resp.Duration.Seconds())
+					if resp.Error != "" {
+						fmt.Fprintf(&b, "**Error:** %s\n\n", resp.Error)
+					}
+					b.WriteString(resp.Content)
+					b.WriteString("\n\n---\n\n")
+				}
+			}
+		}
+
+		if turn.Engine == "delegate" {
+			if turn.Agent != "" {
+				fmt.Fprintf(&b, "**Agent:** %s\n\n", turn.Agent)
+			}
+			if turn.FinalText != "" {
+				b.WriteString(turn.FinalText)
+				b.WriteString("\n\n---\n\n")
+			}
+		}
+	}
+
+	path := filepath.Join(s.RunDir, "summary.md")
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
 func (s *Store) writeJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
