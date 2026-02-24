@@ -108,6 +108,34 @@ func (s *Store) SaveDelegateStderrLine(line []byte) error {
 	return s.appendLine(filepath.Join(s.RunDir, "stderr.log"), line)
 }
 
+// SaveMetaTurnDelegateEvent appends one normalized event for a specific meta session delegate turn.
+func (s *Store) SaveMetaTurnDelegateEvent(turn int, ev agent.Event) error {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("marshal delegate event: %w", err)
+	}
+	return s.appendMetaTurnDelegateLine(turn, "events.normalized.jsonl", data)
+}
+
+// SaveMetaTurnDelegateRawLine appends one provider raw line for a specific meta session delegate turn.
+func (s *Store) SaveMetaTurnDelegateRawLine(turn int, line []byte) error {
+	return s.appendMetaTurnDelegateLine(turn, "events.raw.jsonl", line)
+}
+
+// SaveMetaTurnDelegateStderrLine appends one stderr line for a specific meta session delegate turn.
+func (s *Store) SaveMetaTurnDelegateStderrLine(turn int, line []byte) error {
+	return s.appendMetaTurnDelegateLine(turn, "stderr.log", line)
+}
+
+// SaveMetaTurnDelegateWorkspace persists workspace metadata for a specific meta session delegate turn.
+func (s *Store) SaveMetaTurnDelegateWorkspace(turn int, info DelegateWorkspace) error {
+	dir, err := s.metaTurnDelegateDir(turn)
+	if err != nil {
+		return err
+	}
+	return s.writeJSON(filepath.Join(dir, "workspace.json"), info)
+}
+
 // SaveDelegateWorkspace persists optional workspace metadata.
 func (s *Store) SaveDelegateWorkspace(info DelegateWorkspace) error {
 	return s.writeJSON(filepath.Join(s.RunDir, "workspace.json"), info)
@@ -247,9 +275,9 @@ func (s *Store) SaveSessionSummary(meta RunMeta, turns []SessionTurn) error {
 // MetaSessionTurn captures one turn of a meta session (either engine).
 type MetaSessionTurn struct {
 	Prompt    string               `json:"prompt"`
-	Engine    string               `json:"engine"`              // "brainstorm" or "delegate"
-	Agent     string               `json:"agent,omitempty"`     // delegate agent name
-	Responses [][]adapter.Response `json:"responses,omitempty"` // brainstorm rounds
+	Engine    string               `json:"engine"`               // "brainstorm" or "delegate"
+	Agent     string               `json:"agent,omitempty"`      // delegate agent name
+	Responses [][]adapter.Response `json:"responses,omitempty"`  // brainstorm rounds
 	FinalText string               `json:"final_text,omitempty"` // delegate collected text
 }
 
@@ -309,6 +337,25 @@ func (s *Store) writeJSON(path string, v any) error {
 		return fmt.Errorf("json marshal: %w", err)
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func (s *Store) metaTurnDelegateDir(turn int) (string, error) {
+	if turn < 1 {
+		turn = 1
+	}
+	dir := filepath.Join(s.RunDir, fmt.Sprintf("turn-%d", turn), "delegate")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+func (s *Store) appendMetaTurnDelegateLine(turn int, filename string, line []byte) error {
+	dir, err := s.metaTurnDelegateDir(turn)
+	if err != nil {
+		return err
+	}
+	return s.appendLine(filepath.Join(dir, filename), line)
 }
 
 func (s *Store) appendLine(path string, line []byte) error {

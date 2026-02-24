@@ -55,6 +55,7 @@ func runMeta(prompt *string, args []string) {
 	agentList := fs.String("agents", "claude", "Agents for delegate (comma-separated)")
 	defaultAgent := fs.String("default-agent", "claude", "Default delegate agent")
 	sandbox := fs.String("sandbox", "safe", "Delegate sandbox: safe|write|full")
+	worktreeEnabled := fs.Bool("worktree", false, "Run meta-session delegate turns in isolated git worktrees")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
@@ -146,6 +147,7 @@ func runMeta(prompt *string, args []string) {
 		Approval:     approvalLevel,
 		Agents:       unified.Agents.Ready,
 		Sandbox:      *sandbox,
+		Worktree:     *worktreeEnabled,
 		Timeout:      *timeout,
 		Store:        s,
 		Logger:       log,
@@ -167,7 +169,7 @@ func runMeta(prompt *string, args []string) {
 			os.Exit(1)
 		}
 
-		turn, err := meta.RunOnce(ctx, cfg, *prompt, nil, 0)
+		turn, err := meta.RunOnce(ctx, cfg, *prompt, nil, 1)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			fmt.Printf("Run artifacts saved to: %s\n", s.RunDir)
@@ -454,6 +456,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --agents string         Agents for delegate (default \"claude\")")
 	fmt.Fprintln(os.Stderr, "  --default-agent string  Default delegate agent (default \"claude\")")
 	fmt.Fprintln(os.Stderr, "  --sandbox string        Delegate sandbox: safe|write|full (default \"safe\")")
+	fmt.Fprintln(os.Stderr, "  --worktree              Run meta-session delegate turns in isolated git worktrees")
 	fmt.Fprintln(os.Stderr, "  --runs-dir string       Directory for run artifacts (default \"./runs\")")
 	fmt.Fprintln(os.Stderr, "  --debug                 Print structured diagnostics to stderr")
 	fmt.Fprintln(os.Stderr, "  --allow-api-keys        Don't fail if API key env vars are set")

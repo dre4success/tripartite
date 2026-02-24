@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dre4success/tripartite/adapter"
@@ -36,6 +37,132 @@ func TestParseSlashCommand(t *testing.T) {
 			}
 			if arg != tt.wantArg {
 				t.Errorf("parseSlashCommand(%q) arg = %q, want %q", tt.input, arg, tt.wantArg)
+			}
+		})
+	}
+}
+
+func TestAdjustRouteForAvailability(t *testing.T) {
+	tests := []struct {
+		name         string
+		in           router.Result
+		defaultAgent string
+		adapters     []string
+		agents       []string
+		wantIntent   router.Intent
+		wantAgent    string
+		wantReason   string
+	}{
+		{
+			name:         "delegate_falls_back_to_brainstorm_when_no_agents",
+			in:           router.Result{Intent: router.IntentDelegate, Agent: "claude", Reason: "action verb: fix"},
+			defaultAgent: "claude",
+			adapters:     []string{"claude", "gemini"},
+			agents:       nil,
+			wantIntent:   router.IntentBrainstorm,
+			wantAgent:    "",
+			wantReason:   "fallback to brainstorm",
+		},
+		{
+			name:         "brainstorm_falls_back_to_delegate_when_no_adapters",
+			in:           router.Result{Intent: router.IntentBrainstorm, Reason: "contains question mark"},
+			defaultAgent: "claude",
+			adapters:     nil,
+			agents:       []string{"codex"},
+			wantIntent:   router.IntentDelegate,
+			wantAgent:    "codex",
+			wantReason:   "fallback to delegate",
+		},
+		{
+			name:         "delegate_reselects_available_default_agent",
+			in:           router.Result{Intent: router.IntentDelegate, Agent: "claude", Reason: "action verb: fix"},
+			defaultAgent: "gemini",
+			adapters:     []string{"claude"},
+			agents:       []string{"gemini", "codex"},
+			wantIntent:   router.IntentDelegate,
+			wantAgent:    "gemini",
+			wantReason:   "selected available agent",
+		},
+		{
+			name:         "delegate_keeps_existing_available_agent",
+			in:           router.Result{Intent: router.IntentDelegate, Agent: "codex", Reason: "action verb: fix"},
+			defaultAgent: "claude",
+			adapters:     []string{"claude"},
+			agents:       []string{"codex"},
+			wantIntent:   router.IntentDelegate,
+			wantAgent:    "codex",
+		},
+		{
+			name:         "brainstorm_stays_brainstorm_when_adapters_ready",
+			in:           router.Result{Intent: router.IntentBrainstorm, Reason: "analysis/question word: how"},
+			defaultAgent: "claude",
+			adapters:     []string{"claude"},
+			agents:       nil,
+			wantIntent:   router.IntentBrainstorm,
+			wantAgent:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := adjustRouteForAvailability(tt.in, tt.defaultAgent, tt.adapters, tt.agents)
+			if got.Intent != tt.wantIntent {
+				t.Fatalf("intent = %q, want %q (reason: %s)", got.Intent, tt.wantIntent, got.Reason)
+			}
+			if got.Agent != tt.wantAgent {
+				t.Fatalf("agent = %q, want %q", got.Agent, tt.wantAgent)
+			}
+			if tt.wantReason != "" && !strings.Contains(got.Reason, tt.wantReason) {
+				t.Fatalf("reason = %q, want substring %q", got.Reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestParseDelegateArg(t *testing.T) {
+	cfg := Config{DefaultAgent: "claude"}
+
+	tests := []struct {
+		name              string
+		arg               string
+		wantAgent         string
+		wantPrompt        string
+		wantExplicitAgent bool
+	}{
+		{
+			name:              "explicit_known_agent_with_prompt",
+			arg:               "gemini fix the bug",
+			wantAgent:         "gemini",
+			wantPrompt:        "fix the bug",
+			wantExplicitAgent: true,
+		},
+		{
+			name:              "explicit_known_agent_no_prompt",
+			arg:               "codex",
+			wantAgent:         "codex",
+			wantPrompt:        "",
+			wantExplicitAgent: true,
+		},
+		{
+			name:              "unknown_word_is_prompt_uses_default_agent",
+			arg:               "fix the bug",
+			wantAgent:         "claude",
+			wantPrompt:        "fix the bug",
+			wantExplicitAgent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agentName, prompt, explicit := parseDelegateArg(tt.arg, cfg)
+			if agentName != tt.wantAgent {
+				t.Fatalf("agent = %q, want %q", agentName, tt.wantAgent)
+			}
+			if prompt != tt.wantPrompt {
+				t.Fatalf("prompt = %q, want %q", prompt, tt.wantPrompt)
+			}
+			if explicit != tt.wantExplicitAgent {
+				t.Fatalf("explicit = %v, want %v", explicit, tt.wantExplicitAgent)
 			}
 		})
 	}

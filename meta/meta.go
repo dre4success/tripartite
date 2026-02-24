@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,9 +14,11 @@ import (
 	"github.com/dre4success/tripartite/display"
 	"github.com/dre4success/tripartite/logger"
 	"github.com/dre4success/tripartite/orchestrator"
+	"github.com/dre4success/tripartite/preflight"
 	"github.com/dre4success/tripartite/router"
 	"github.com/dre4success/tripartite/store"
 	"github.com/dre4success/tripartite/stream"
+	"github.com/dre4success/tripartite/workspace"
 )
 
 // Turn captures the result of one meta session turn.
@@ -44,6 +47,7 @@ type Config struct {
 	Approval     adapter.ApprovalLevel
 	Agents       []agent.Agent
 	Sandbox      string
+	Worktree     bool
 	Timeout      time.Duration
 	Store        *store.Store
 	Logger       *logger.Logger
@@ -109,7 +113,7 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Println("Usage: /brainstorm <prompt>")
 				continue
 			}
-			turn, err := runOnceForced(ctx, cfg, arg, turns, len(turns)+1, router.IntentBrainstorm, "")
+			turn, err := runOnceForced(ctx, cfg, arg, turns, len(turns)+1, router.IntentBrainstorm, "", false)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				continue
@@ -122,12 +126,12 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Println("Usage: /delegate [agent] <prompt>")
 				continue
 			}
-			agentName, prompt := parseDelegateArg(arg, cfg)
+			agentName, prompt, explicitAgent := parseDelegateArg(arg, cfg)
 			if prompt == "" {
 				fmt.Println("Usage: /delegate [agent] <prompt>")
 				continue
 			}
-			turn, err := runOnceForced(ctx, cfg, prompt, turns, len(turns)+1, router.IntentDelegate, agentName)
+			turn, err := runOnceForced(ctx, cfg, prompt, turns, len(turns)+1, router.IntentDelegate, agentName, explicitAgent)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				continue
@@ -159,18 +163,34 @@ func Start(ctx context.Context, cfg Config) error {
 // appropriate engine. Used by both the REPL (per-turn) and one-shot mode.
 func RunOnce(ctx context.Context, cfg Config, prompt string, history []Turn, turnNum int) (*Turn, error) {
 	route := router.Classify(prompt, router.Config{DefaultAgent: cfg.DefaultAgent})
+	route = adjustRouteForAvailability(route, cfg.DefaultAgent, adapterNames(cfg.Adapters), agentNames(cfg.Agents))
 	return dispatch(ctx, cfg, prompt, history, turnNum, route)
 }
 
 // runOnceForced bypasses the router and forces a specific intent.
-func runOnceForced(ctx context.Context, cfg Config, prompt string, history []Turn, turnNum int, intent router.Intent, agentName string) (*Turn, error) {
+func runOnceForced(ctx context.Context, cfg Config, prompt string, history []Turn, turnNum int, intent router.Intent, agentName string, explicitAgent bool) (*Turn, error) {
 	route := router.Result{
 		Intent: intent,
 		Agent:  agentName,
 		Reason: "forced via slash command",
 	}
-	if intent == router.IntentDelegate && agentName == "" {
-		route.Agent = cfg.DefaultAgent
+	if intent == router.IntentDelegate {
+		if agentName == "" {
+			route.Agent = cfg.DefaultAgent
+		}
+		// Preserve explicit user-chosen agents even if unavailable so the error is clear.
+		// Only auto-reselect when the target was implicit (default/fallback behavior).
+		if !explicitAgent {
+			if selected, changed := pickAvailableAgent(route.Agent, cfg.DefaultAgent, agentNames(cfg.Agents)); selected != "" {
+				route.Agent = selected
+				if changed {
+					route.Reason += fmt.Sprintf("; selected available agent %q", selected)
+				}
+			}
+		}
+		if explicitAgent && route.Agent != "" {
+			route.Reason += fmt.Sprintf("; explicit agent %q", route.Agent)
+		}
 	}
 	return dispatch(ctx, cfg, prompt, history, turnNum, route)
 }
@@ -183,7 +203,7 @@ func dispatch(ctx context.Context, cfg Config, prompt string, history []Turn, tu
 
 	switch route.Intent {
 	case router.IntentBrainstorm:
-		fmt.Printf("[route] brainstorm — %q\n", truncate(prompt, 60))
+		printRoute("brainstorm", route, prompt)
 		result, err := runBrainstorm(ctx, cfg, prompt, history, turnNum)
 		if err != nil {
 			return nil, err
@@ -192,8 +212,8 @@ func dispatch(ctx context.Context, cfg Config, prompt string, history []Turn, tu
 		return turn, nil
 
 	case router.IntentDelegate:
-		fmt.Printf("[route] delegate → %s — %q\n", route.Agent, truncate(prompt, 60))
-		result, err := runDelegate(ctx, cfg, prompt, route.Agent)
+		printRoute("delegate", route, prompt)
+		result, err := runDelegate(ctx, cfg, prompt, route.Agent, turnNum)
 		if err != nil {
 			return nil, err
 		}
@@ -203,6 +223,39 @@ func dispatch(ctx context.Context, cfg Config, prompt string, history []Turn, tu
 	default:
 		return nil, fmt.Errorf("unknown intent: %s", route.Intent)
 	}
+}
+
+// parseSlashCommand splits input into command and argument.
+// Returns ("", input) for non-slash input.
+func parseSlashCommand(input string) (cmd, arg string) {
+	if !strings.HasPrefix(input, "/") {
+		return "", input
+	}
+
+	parts := strings.SplitN(input[1:], " ", 2)
+	cmd = strings.ToLower(parts[0])
+	if len(parts) > 1 {
+		arg = strings.TrimSpace(parts[1])
+	}
+	return cmd, arg
+}
+
+// parseDelegateArg parses "/delegate [agent] <prompt>".
+// If the first word is any known agent name (installed or not), it is treated as an explicit agent target.
+// Otherwise the default agent is used and the full arg is treated as the prompt.
+func parseDelegateArg(arg string, cfg Config) (agentName, prompt string, explicitAgent bool) {
+	parts := strings.SplitN(arg, " ", 2)
+	firstName := parts[0]
+
+	if _, ok := agent.Registry[firstName]; ok {
+		if len(parts) > 1 {
+			return firstName, strings.TrimSpace(parts[1]), true
+		}
+		return firstName, "", true
+	}
+
+	// First word is not a known agent — treat entire arg as prompt.
+	return cfg.DefaultAgent, arg, false
 }
 
 func runBrainstorm(ctx context.Context, cfg Config, prompt string, history []Turn, turnNum int) (*BrainstormResult, error) {
@@ -228,7 +281,7 @@ func runBrainstorm(ctx context.Context, cfg Config, prompt string, history []Tur
 	return &BrainstormResult{Rounds: allRounds}, nil
 }
 
-func runDelegate(ctx context.Context, cfg Config, prompt string, agentName string) (*DelegateResult, error) {
+func runDelegate(ctx context.Context, cfg Config, prompt string, agentName string, turnNum int) (*DelegateResult, error) {
 	var a agent.Agent
 	for _, ag := range cfg.Agents {
 		if ag.Name() == agentName {
@@ -246,6 +299,41 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
+	runCwd := cwd
+	if turnNum < 1 {
+		turnNum = 1
+	}
+
+	var wsInfo store.DelegateWorkspace
+	if cfg.Worktree {
+		if err := preflight.CheckWorktreePrereqs(ctx, cwd); err != nil {
+			return nil, err
+		}
+
+		taskID := fmt.Sprintf("meta-t%d-%d", turnNum, time.Now().UnixNano())
+		if cfg.Store != nil && cfg.Store.RunDir != "" {
+			taskID = fmt.Sprintf("%s-t%d-%d", filepath.Base(cfg.Store.RunDir), turnNum, time.Now().UnixNano())
+		}
+
+		info, err := workspace.Prepare(ctx, cwd, taskID, a.Name())
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare worktree: %w", err)
+		}
+		wsInfo = store.DelegateWorkspace{
+			Enabled:      true,
+			TaskID:       info.TaskID,
+			WorktreePath: info.WorktreePath,
+			Branch:       info.Branch,
+			BaseCommit:   info.BaseCommit,
+		}
+		runCwd = info.WorktreePath
+		fmt.Printf("Using worktree: %s\n", runCwd)
+		if cfg.Store != nil {
+			if err := cfg.Store.SaveMetaTurnDelegateWorkspace(turnNum, wsInfo); err != nil {
+				fmt.Printf("[warn] failed to save workspace metadata: %v\n", err)
+			}
+		}
+	}
 
 	var cancel context.CancelFunc
 	if cfg.Timeout > 0 {
@@ -259,13 +347,13 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 	runErr := stream.Run(ctx, a, prompt, agent.StreamOpts{
 		Model:   resolvedModel,
 		Sandbox: cfg.Sandbox,
-		Cwd:     cwd,
+		Cwd:     runCwd,
 	}, stream.Callbacks{
 		OnEvent: func(ev agent.Event) {
 			eventCount++
 			display.PrintEvent(ev)
 			if cfg.Store != nil {
-				if err := cfg.Store.SaveDelegateEvent(ev); err != nil {
+				if err := cfg.Store.SaveMetaTurnDelegateEvent(turnNum, ev); err != nil {
 					fmt.Printf("[warn] failed to save event: %v\n", err)
 				}
 			}
@@ -277,7 +365,7 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 		},
 		OnRawLine: func(line []byte) {
 			if cfg.Store != nil {
-				if err := cfg.Store.SaveDelegateRawLine(line); err != nil {
+				if err := cfg.Store.SaveMetaTurnDelegateRawLine(turnNum, line); err != nil {
 					fmt.Printf("[warn] failed to save raw line: %v\n", err)
 				}
 			}
@@ -285,7 +373,7 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 		OnStderrLine: func(line []byte) {
 			fmt.Printf("[%s][stderr] %s\n", a.Name(), string(line))
 			if cfg.Store != nil {
-				if err := cfg.Store.SaveDelegateStderrLine(line); err != nil {
+				if err := cfg.Store.SaveMetaTurnDelegateStderrLine(turnNum, line); err != nil {
 					fmt.Printf("[warn] failed to save stderr: %v\n", err)
 				}
 			}
@@ -294,6 +382,29 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 			fmt.Printf("[%s][parse-error] %v\n", a.Name(), err)
 		},
 	})
+
+	if wsInfo.Enabled {
+		inspectCtx, inspectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		head, commits, err := workspace.Inspect(inspectCtx, wsInfo.WorktreePath, wsInfo.BaseCommit)
+		inspectCancel()
+		if err != nil {
+			fmt.Printf("[warn] failed to inspect worktree commits: %v\n", err)
+		} else {
+			wsInfo.HeadCommit = head
+			wsInfo.Commits = make([]store.DelegateCommit, 0, len(commits))
+			for _, c := range commits {
+				wsInfo.Commits = append(wsInfo.Commits, store.DelegateCommit{
+					SHA:     c.SHA,
+					Subject: c.Subject,
+				})
+			}
+			if cfg.Store != nil {
+				if err := cfg.Store.SaveMetaTurnDelegateWorkspace(turnNum, wsInfo); err != nil {
+					fmt.Printf("[warn] failed to save workspace metadata: %v\n", err)
+				}
+			}
+		}
+	}
 
 	if runErr != nil {
 		return nil, runErr
@@ -304,6 +415,106 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 		EventCount: eventCount,
 		FinalText:  finalText.String(),
 	}, nil
+}
+
+func printRoute(kind string, route router.Result, prompt string) {
+	label := kind
+	if kind == "delegate" && route.Agent != "" {
+		label = fmt.Sprintf("%s → %s", kind, route.Agent)
+	}
+	if route.Reason != "" {
+		fmt.Printf("[route] %s (%s) — %q\n", label, route.Reason, truncate(prompt, 60))
+		return
+	}
+	fmt.Printf("[route] %s — %q\n", label, truncate(prompt, 60))
+}
+
+func adjustRouteForAvailability(route router.Result, defaultAgent string, adapters, agents []string) router.Result {
+	switch route.Intent {
+	case router.IntentBrainstorm:
+		if len(adapters) > 0 {
+			return route
+		}
+		if len(agents) == 0 {
+			return route
+		}
+		agentName, changed := pickAvailableAgent(route.Agent, defaultAgent, agents)
+		route.Intent = router.IntentDelegate
+		route.Agent = agentName
+		if route.Reason == "" {
+			route.Reason = "fallback to delegate (no brainstorm adapters ready)"
+		} else {
+			route.Reason += "; fallback to delegate (no brainstorm adapters ready)"
+		}
+		if changed {
+			route.Reason += fmt.Sprintf("; selected available agent %q", agentName)
+		}
+		return route
+
+	case router.IntentDelegate:
+		if len(agents) > 0 {
+			agentName, changed := pickAvailableAgent(route.Agent, defaultAgent, agents)
+			route.Agent = agentName
+			if changed {
+				if route.Reason == "" {
+					route.Reason = fmt.Sprintf("selected available agent %q", agentName)
+				} else {
+					route.Reason += fmt.Sprintf("; selected available agent %q", agentName)
+				}
+			}
+			return route
+		}
+		if len(adapters) == 0 {
+			return route
+		}
+		route.Intent = router.IntentBrainstorm
+		route.Agent = ""
+		if route.Reason == "" {
+			route.Reason = "fallback to brainstorm (no delegate agents ready)"
+		} else {
+			route.Reason += "; fallback to brainstorm (no delegate agents ready)"
+		}
+		return route
+	}
+	return route
+}
+
+func adapterNames(adapters []adapter.Adapter) []string {
+	names := make([]string, 0, len(adapters))
+	for _, a := range adapters {
+		names = append(names, a.Name())
+	}
+	return names
+}
+
+func agentNames(agents []agent.Agent) []string {
+	names := make([]string, 0, len(agents))
+	for _, a := range agents {
+		names = append(names, a.Name())
+	}
+	return names
+}
+
+func pickAvailableAgent(preferred, defaultAgent string, agents []string) (string, bool) {
+	if len(agents) == 0 {
+		return "", false
+	}
+	if preferred != "" && containsName(agents, preferred) {
+		return preferred, false
+	}
+	if defaultAgent != "" && containsName(agents, defaultAgent) {
+		return defaultAgent, preferred != defaultAgent
+	}
+	return agents[0], preferred != agents[0]
+}
+
+func containsName(names []string, target string) bool {
+	for _, n := range names {
+		if n == target {
+			return true
+		}
+	}
+	return false
 }
 
 // toOrchestratorHistory converts meta session turns to orchestrator turns so
@@ -329,40 +540,6 @@ func toOrchestratorHistory(turns []Turn) []orchestrator.Turn {
 		out = append(out, ot)
 	}
 	return out
-}
-
-// parseSlashCommand splits input into command and argument.
-// Returns ("", input) for non-slash input.
-func parseSlashCommand(input string) (cmd, arg string) {
-	if !strings.HasPrefix(input, "/") {
-		return "", input
-	}
-
-	parts := strings.SplitN(input[1:], " ", 2)
-	cmd = strings.ToLower(parts[0])
-	if len(parts) > 1 {
-		arg = strings.TrimSpace(parts[1])
-	}
-	return cmd, arg
-}
-
-// parseDelegateArg parses "/delegate [agent] <prompt>". If the first word is a
-// known agent name, it's used; otherwise the default agent is used.
-func parseDelegateArg(arg string, cfg Config) (agentName, prompt string) {
-	parts := strings.SplitN(arg, " ", 2)
-	firstName := parts[0]
-
-	for _, a := range cfg.Agents {
-		if a.Name() == firstName {
-			if len(parts) > 1 {
-				return firstName, strings.TrimSpace(parts[1])
-			}
-			return firstName, ""
-		}
-	}
-
-	// First word is not an agent — treat entire arg as prompt.
-	return cfg.DefaultAgent, arg
 }
 
 func saveMetaSession(cfg Config, adapterNames, agentNames []string, turns []Turn) error {
