@@ -204,10 +204,19 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 
 	taskType := ""
 	intent := ""
+	var roles *RoleMap
 	if cc.intent != nil {
 		taskType = string(cc.intent.TaskType)
 		intent = cc.intent.NormalizedGoal
+		roles = &cc.intent.Roles
 	}
+
+	// Status snapshots should reflect the current machine state, even if they are emitted
+	// at loop boundaries before handle() refreshes cc.currentPhase.
+	statusPhase := phaseName(cc.state)
+	statusPass := cc.passForState(cc.state)
+	tx := cc.transcript.StatusSummary(statusPhase, statusPass)
+	board := cc.transcript.PhaseBoardSummary(statusPhase, statusPass, roles)
 
 	subtasks := buildSubtaskStatuses(cc)
 	completed := 0
@@ -220,8 +229,8 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 	cfg.Status.Update(CycleStatus{
 		CycleID:           cc.cycleID,
 		State:             cc.state,
-		Phase:             cc.currentPhase,
-		Pass:              cc.currentPass(),
+		Phase:             statusPhase,
+		Pass:              statusPass,
 		StartedAt:         start,
 		Elapsed:           time.Since(start),
 		CurrentSubtask:    cc.currentSubtask,
@@ -236,6 +245,9 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 		TaskType:          taskType,
 		Intent:            intent,
 		TranscriptLen:     cc.transcript.Len(),
+		LastTranscript:    tx,
+		CurrentReview:     tx.Review,
+		CurrentBoard:      board,
 	})
 }
 

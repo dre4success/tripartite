@@ -57,6 +57,7 @@ func runMeta(prompt *string, args []string) {
 	sandbox := fs.String("sandbox", "safe", "Delegate sandbox: safe|write|full")
 	worktreeEnabled := fs.Bool("worktree", false, "Run meta-session delegate turns in isolated git worktrees")
 	cycleEnabled := fs.Bool("cycle", false, "Enable task cycle state machine (experimental)")
+	cycleLive := fs.String("cycle-live", "compact", "Cycle live updates: off|compact|verbose")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
@@ -69,6 +70,11 @@ func runMeta(prompt *string, args []string) {
 	log := logger.New(*debug)
 
 	approvalLevel, err := adapter.ParseApprovalLevel(*approval)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	cycleLiveMode, err := meta.ParseLiveCycleVerbosity(*cycleLive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -154,6 +160,7 @@ func runMeta(prompt *string, args []string) {
 		Logger:       log,
 		DefaultAgent: *defaultAgent,
 		CycleEnabled: *cycleEnabled,
+		CycleLive:    cycleLiveMode,
 	}
 
 	if prompt != nil {

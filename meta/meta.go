@@ -64,6 +64,7 @@ type Config struct {
 	Logger       *logger.Logger
 	DefaultAgent string
 	CycleEnabled bool
+	CycleLive    LiveCycleVerbosity
 }
 
 // Start launches the interactive meta session REPL.
@@ -78,13 +79,18 @@ func Start(ctx context.Context, cfg Config) error {
 	for i, a := range cfg.Agents {
 		agentNames[i] = a.Name()
 	}
+	effectiveCycleLive := cfg.CycleLive
+	if effectiveCycleLive == "" {
+		effectiveCycleLive = LiveCycleCompact
+	}
 
 	fmt.Println("Tripartite meta session")
 	fmt.Printf("Adapters: %s\n", strings.Join(adapterNames, ", "))
 	fmt.Printf("Agents: %s\n", strings.Join(agentNames, ", "))
 	if cfg.CycleEnabled {
 		fmt.Println("Mode: cycle state machine (experimental)")
-		fmt.Println("Commands: /status, /approve, /deny, /stop, /history, /help, /quit")
+		fmt.Printf("Live updates: %s\n", effectiveCycleLive)
+		fmt.Println("Commands: /status, /board, /live, /approve, /deny, /stop, /history, /help, /quit")
 	} else {
 		fmt.Println("Commands: /brainstorm, /delegate, /history, /help, /quit")
 	}
@@ -107,9 +113,27 @@ func Start(ctx context.Context, cfg Config) error {
 	var cycleCancel context.CancelFunc
 	var cycleRunning bool
 	var cyclePrompt string
+	var cycleLiveStop chan struct{}
+	cycleLiveMode := effectiveCycleLive
+
+	stopCycleLiveWatcher := func() {
+		if cycleLiveStop != nil {
+			close(cycleLiveStop)
+			cycleLiveStop = nil
+		}
+	}
+	startOrRestartCycleLiveWatcher := func() {
+		stopCycleLiveWatcher()
+		if !cycleRunning || statusProvider == nil || cycleLiveMode == LiveCycleOff {
+			return
+		}
+		cycleLiveStop = make(chan struct{})
+		startCycleLiveWatcher(cycleLiveStop, statusProvider, cycleLiveMode)
+	}
 
 	consumeCycleResult := func(cr cycleResult) {
 		cycleRunning = false
+		stopCycleLiveWatcher()
 		if statusProvider != nil {
 			statusProvider.Clear()
 		}
@@ -156,6 +180,7 @@ func Start(ctx context.Context, cfg Config) error {
 		switch cmd {
 		case "quit", "exit":
 			if cycleRunning && cycleCancel != nil {
+				stopCycleLiveWatcher()
 				cycleCancel()
 			}
 			fmt.Println("Ending session.")
@@ -192,6 +217,45 @@ func Start(ctx context.Context, cfg Config) error {
 				continue
 			}
 			printCycleStatus(statusProvider, broker)
+			continue
+
+		case "board":
+			if !cfg.CycleEnabled {
+				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				continue
+			}
+			if !cycleRunning {
+				fmt.Println("No cycle is currently running.")
+				continue
+			}
+			printCycleBoard(statusProvider)
+			continue
+
+		case "live":
+			if !cfg.CycleEnabled {
+				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				continue
+			}
+			modeArg := strings.TrimSpace(arg)
+			if modeArg == "" {
+				fmt.Printf("Cycle live mode: %s\n", cycleLiveMode)
+				fmt.Println("Usage: /live <off|compact|verbose>")
+				continue
+			}
+			mode, err := ParseLiveCycleVerbosity(modeArg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				continue
+			}
+			if mode == cycleLiveMode {
+				fmt.Printf("Cycle live mode unchanged: %s\n", mode)
+				continue
+			}
+			cycleLiveMode = mode
+			if cycleRunning {
+				startOrRestartCycleLiveWatcher()
+			}
+			fmt.Printf("Cycle live mode set to: %s\n", cycleLiveMode)
 			continue
 
 		case "approve":
@@ -332,6 +396,7 @@ func Start(ctx context.Context, cfg Config) error {
 					result, err := cycle.Run(cycleCtx, cycleCfg)
 					cycleDone <- cycleResult{result: result, err: err}
 				}()
+				startOrRestartCycleLiveWatcher()
 
 				cyclePrompt = input
 				fmt.Printf("[cycle] Started for: %q\n", truncate(input, 60))
@@ -351,6 +416,7 @@ func Start(ctx context.Context, cfg Config) error {
 	}
 
 	if cycleRunning && cycleCancel != nil {
+		stopCycleLiveWatcher()
 		cycleCancel()
 	}
 
@@ -864,6 +930,8 @@ func printHelp() {
 func printCycleHelp() {
 	fmt.Println("Cycle commands:")
 	fmt.Println("  /status                    Show current cycle state")
+	fmt.Println("  /board                     Show current transcript-backed phase board")
+	fmt.Println("  /live [mode]               Set live updates: off|compact|verbose")
 	fmt.Println("  /approve [ticket-id]       Approve pending approval")
 	fmt.Println("  /deny [ticket-id]          Deny pending approval")
 	fmt.Println("  /stop                      Cancel running cycle")
@@ -878,10 +946,7 @@ func truncate(s string, max int) string {
 }
 
 func truncateDesc(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
+	return truncate(s, max)
 }
 
 // printCycleStatus renders a rich /status display from the StatusProvider and broker.
@@ -931,6 +996,28 @@ func printCycleStatus(sp *cycle.StatusProvider, broker *cycle.ApprovalBroker) {
 
 	fmt.Printf("  Revisions: %d/%d\n", snap.RevisionCount, snap.MaxRevisions)
 	fmt.Printf("  Transcript entries: %d\n", snap.TranscriptLen)
+	if snap.LastTranscript.LastSummary != "" {
+		actor := snap.LastTranscript.LastAgent
+		if actor == "" {
+			actor = "coordinator"
+		}
+		fmt.Printf("  Last activity: [%s][%s] %s\n", snap.LastTranscript.LastKind, actor, snap.LastTranscript.LastSummary)
+	}
+	if rs := snap.CurrentReview; rs != nil {
+		fmt.Printf("  Review pass: %s #%d (%d findings: %d blocker, %d warn, %d info)\n",
+			rs.Phase, rs.Pass, rs.Total, rs.Blockers, rs.Warns, rs.Infos)
+	}
+	if board := snap.CurrentBoard; board != nil && len(board.Items) > 0 {
+		fmt.Printf("  Phase board (%s #%d):\n", board.Phase, board.Pass)
+		for _, item := range board.Items {
+			fmt.Printf("    [%s][%s][%s] %s\n",
+				item.Role,
+				item.Agent,
+				item.Kind,
+				truncateDesc(item.Summary, 90),
+			)
+		}
+	}
 
 	if snap.LastError != "" {
 		fmt.Printf("  Last error: %s\n", snap.LastError)
@@ -941,6 +1028,33 @@ func printCycleStatus(sp *cycle.StatusProvider, broker *cycle.ApprovalBroker) {
 	}
 
 	fmt.Println(separator)
+}
+
+func printCycleBoard(sp *cycle.StatusProvider) {
+	if sp == nil {
+		fmt.Println("No cycle status provider.")
+		return
+	}
+	snap := sp.Snapshot()
+	if snap == nil {
+		fmt.Println("Cycle is running (no status available yet).")
+		return
+	}
+	board := snap.CurrentBoard
+	if board == nil || len(board.Items) == 0 {
+		fmt.Printf("No phase board entries yet (phase: %s#%d).\n", snap.Phase, snap.Pass)
+		return
+	}
+
+	fmt.Printf("Phase board (%s #%d):\n", board.Phase, board.Pass)
+	for _, item := range board.Items {
+		fmt.Printf("  [%s][%s][%s] %s\n",
+			item.Role,
+			item.Agent,
+			item.Kind,
+			truncateDesc(item.Summary, 120),
+		)
+	}
 }
 
 // printPendingApprovals renders any pending approval tickets.

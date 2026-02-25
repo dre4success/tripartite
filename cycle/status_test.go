@@ -60,6 +60,23 @@ func TestStatusProviderSnapshotCopyIsolation(t *testing.T) {
 		CycleID:    "cycle-iso",
 		State:      StatePlan,
 		RetryCount: map[string]int{"st-1": 1},
+		LastTranscript: TranscriptStatusSummary{
+			LastKind:  KindReviewFinding,
+			LastAgent: "reviewer",
+			Review: &ReviewPassStats{
+				Phase:    "output_review",
+				Pass:     1,
+				Total:    1,
+				Blockers: 1,
+			},
+		},
+		CurrentBoard: &PhaseBoardSummary{
+			Phase: "output_review",
+			Pass:  1,
+			Items: []PhaseBoardItem{
+				{Role: "reviewer", Agent: "reviewer", Kind: KindReviewFinding, Summary: "old"},
+			},
+		},
 		Subtasks: []SubtaskStatus{
 			{ID: "st-1", Completed: false},
 		},
@@ -71,6 +88,8 @@ func TestStatusProviderSnapshotCopyIsolation(t *testing.T) {
 	snap.CycleID = "mutated"
 	snap.RetryCount["st-1"] = 99
 	snap.Subtasks[0].Completed = true
+	snap.LastTranscript.Review.Blockers = 99
+	snap.CurrentBoard.Items[0].Summary = "mutated"
 
 	// Original should be unaffected.
 	original := sp.Snapshot()
@@ -82,6 +101,12 @@ func TestStatusProviderSnapshotCopyIsolation(t *testing.T) {
 	}
 	if original.Subtasks[0].Completed {
 		t.Error("mutation leaked: Subtasks[0].Completed = true")
+	}
+	if original.LastTranscript.Review == nil || original.LastTranscript.Review.Blockers != 1 {
+		t.Errorf("mutation leaked: LastTranscript.Review = %+v", original.LastTranscript.Review)
+	}
+	if original.CurrentBoard == nil || len(original.CurrentBoard.Items) != 1 || original.CurrentBoard.Items[0].Summary != "old" {
+		t.Errorf("mutation leaked: CurrentBoard = %+v", original.CurrentBoard)
 	}
 }
 

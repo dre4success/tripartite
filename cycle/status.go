@@ -18,24 +18,27 @@ type SubtaskStatus struct {
 
 // CycleStatus is a point-in-time snapshot of cycle progress.
 type CycleStatus struct {
-	CycleID           string           `json:"cycle_id"`
-	State             State            `json:"state"`
-	Phase             string           `json:"phase"`
-	Pass              int              `json:"pass"`
-	StartedAt         time.Time        `json:"started_at"`
-	Elapsed           time.Duration    `json:"elapsed"`
-	CurrentSubtask    string           `json:"current_subtask,omitempty"`
-	TotalSubtasks     int              `json:"total_subtasks"`
-	CompletedSubtasks int              `json:"completed_subtasks"`
-	Subtasks          []SubtaskStatus  `json:"subtasks,omitempty"`
-	RevisionCount     int              `json:"revision_count"`
-	MaxRevisions      int              `json:"max_revisions"`
-	RetryCount        map[string]int   `json:"retry_count,omitempty"`
-	PendingApprovals  int              `json:"pending_approvals"`
-	LastError         string           `json:"last_error,omitempty"`
-	TaskType          string           `json:"task_type,omitempty"`
-	Intent            string           `json:"intent,omitempty"`
-	TranscriptLen     int              `json:"transcript_len"`
+	CycleID           string                  `json:"cycle_id"`
+	State             State                   `json:"state"`
+	Phase             string                  `json:"phase"`
+	Pass              int                     `json:"pass"`
+	StartedAt         time.Time               `json:"started_at"`
+	Elapsed           time.Duration           `json:"elapsed"`
+	CurrentSubtask    string                  `json:"current_subtask,omitempty"`
+	TotalSubtasks     int                     `json:"total_subtasks"`
+	CompletedSubtasks int                     `json:"completed_subtasks"`
+	Subtasks          []SubtaskStatus         `json:"subtasks,omitempty"`
+	RevisionCount     int                     `json:"revision_count"`
+	MaxRevisions      int                     `json:"max_revisions"`
+	RetryCount        map[string]int          `json:"retry_count,omitempty"`
+	PendingApprovals  int                     `json:"pending_approvals"`
+	LastError         string                  `json:"last_error,omitempty"`
+	TaskType          string                  `json:"task_type,omitempty"`
+	Intent            string                  `json:"intent,omitempty"`
+	TranscriptLen     int                     `json:"transcript_len"`
+	LastTranscript    TranscriptStatusSummary `json:"last_transcript,omitempty"`
+	CurrentReview     *ReviewPassStats        `json:"current_review,omitempty"`
+	CurrentBoard      *PhaseBoardSummary      `json:"current_board,omitempty"`
 }
 
 // StatusProvider is a thread-safe snapshot store.
@@ -59,6 +62,22 @@ func cloneCycleStatus(s CycleStatus) CycleStatus {
 	if s.RetryCount != nil {
 		cp.RetryCount = make(map[string]int, len(s.RetryCount))
 		maps.Copy(cp.RetryCount, s.RetryCount)
+	}
+	if s.LastTranscript.Review != nil {
+		rc := *s.LastTranscript.Review
+		cp.LastTranscript.Review = &rc
+	}
+	if s.CurrentReview != nil {
+		rc := *s.CurrentReview
+		cp.CurrentReview = &rc
+	}
+	if s.CurrentBoard != nil {
+		bc := *s.CurrentBoard
+		if s.CurrentBoard.Items != nil {
+			bc.Items = make([]PhaseBoardItem, len(s.CurrentBoard.Items))
+			copy(bc.Items, s.CurrentBoard.Items)
+		}
+		cp.CurrentBoard = &bc
 	}
 	return cp
 }

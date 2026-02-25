@@ -82,6 +82,7 @@ func (cc *cycleContext) handle(ctx context.Context) error {
 	case StatePlanReview:
 		cc.planReviewPassCount++
 	}
+	cc.pushStatus()
 
 	switch cc.state {
 	case StateInit:
