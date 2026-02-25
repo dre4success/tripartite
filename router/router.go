@@ -38,6 +38,58 @@ var analysisWords = map[string]bool{
 	"is": true, "are": true, "does": true, "can": true,
 }
 
+// TaskType classifies the nature of a prompt for the task cycle state machine.
+type TaskType string
+
+const (
+	TaskDiscuss    TaskType = "discuss"
+	TaskCodeChange TaskType = "code_change"
+	TaskHybrid     TaskType = "hybrid"
+)
+
+// TaskResult extends Result with a TaskType classification.
+type TaskResult struct {
+	Result
+	TaskType TaskType
+}
+
+// ClassifyTask determines the task type for cycle mode.
+// Maps IntentBrainstorm → discuss, IntentDelegate → code_change.
+// Detects hybrid when a prompt contains both action verbs AND analysis words.
+func ClassifyTask(prompt string, cfg Config) TaskResult {
+	base := Classify(prompt, cfg)
+
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return TaskResult{Result: base, TaskType: TaskDiscuss}
+	}
+
+	lower := strings.ToLower(trimmed)
+	words := strings.Fields(lower)
+
+	hasAction := false
+	hasAnalysis := false
+	for _, w := range words {
+		if actionVerbs[w] {
+			hasAction = true
+		}
+		if analysisWords[w] {
+			hasAnalysis = true
+		}
+	}
+
+	if hasAction && hasAnalysis {
+		return TaskResult{Result: base, TaskType: TaskHybrid}
+	}
+
+	switch base.Intent {
+	case IntentDelegate:
+		return TaskResult{Result: base, TaskType: TaskCodeChange}
+	default:
+		return TaskResult{Result: base, TaskType: TaskDiscuss}
+	}
+}
+
 // Classify determines whether a prompt should be routed to brainstorm or delegate.
 // Checked in order: action verbs → question marks / analysis words → fallback to brainstorm.
 func Classify(prompt string, cfg Config) Result {

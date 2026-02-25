@@ -274,11 +274,14 @@ func (s *Store) SaveSessionSummary(meta RunMeta, turns []SessionTurn) error {
 
 // MetaSessionTurn captures one turn of a meta session (either engine).
 type MetaSessionTurn struct {
-	Prompt    string               `json:"prompt"`
-	Engine    string               `json:"engine"`               // "brainstorm" or "delegate"
-	Agent     string               `json:"agent,omitempty"`      // delegate agent name
-	Responses [][]adapter.Response `json:"responses,omitempty"`  // brainstorm rounds
-	FinalText string               `json:"final_text,omitempty"` // delegate collected text
+	Prompt     string               `json:"prompt"`
+	Engine     string               `json:"engine"`                // "brainstorm" or "delegate"
+	Agent      string               `json:"agent,omitempty"`       // delegate agent name
+	CycleID    string               `json:"cycle_id,omitempty"`    // cycle identifier
+	CycleState string               `json:"cycle_state,omitempty"` // cycle final state
+	Responses  [][]adapter.Response `json:"responses,omitempty"`   // brainstorm rounds
+	FinalText  string               `json:"final_text,omitempty"`  // delegate collected text
+	Error      string               `json:"error,omitempty"`       // delegate/cycle error summary
 }
 
 // SaveMetaSessionSummary writes a summary.md for a meta session with mixed engine turns.
@@ -320,6 +323,25 @@ func (s *Store) SaveMetaSessionSummary(meta RunMeta, turns []MetaSessionTurn) er
 			if turn.Agent != "" {
 				fmt.Fprintf(&b, "**Agent:** %s\n\n", turn.Agent)
 			}
+			if turn.Error != "" {
+				fmt.Fprintf(&b, "**Error:** %s\n\n", turn.Error)
+			}
+			if turn.FinalText != "" {
+				b.WriteString(turn.FinalText)
+				b.WriteString("\n\n---\n\n")
+			}
+		}
+
+		if turn.Engine == "cycle" {
+			if turn.CycleID != "" {
+				fmt.Fprintf(&b, "**Cycle ID:** %s\n\n", turn.CycleID)
+			}
+			if turn.CycleState != "" {
+				fmt.Fprintf(&b, "**Final State:** %s\n\n", turn.CycleState)
+			}
+			if turn.Error != "" {
+				fmt.Fprintf(&b, "**Error:** %s\n\n", turn.Error)
+			}
 			if turn.FinalText != "" {
 				b.WriteString(turn.FinalText)
 				b.WriteString("\n\n---\n\n")
@@ -356,6 +378,41 @@ func (s *Store) appendMetaTurnDelegateLine(turn int, filename string, line []byt
 		return err
 	}
 	return s.appendLine(filepath.Join(dir, filename), line)
+}
+
+// CycleCheckpoint captures cycle state at a point in time.
+type CycleCheckpoint struct {
+	CycleID    string        `json:"cycle_id"`
+	State      string        `json:"state"`
+	Timestamp  time.Time     `json:"timestamp"`
+	EntryCount int           `json:"entry_count"`
+	Elapsed    time.Duration `json:"elapsed"`
+	Error      string        `json:"error,omitempty"`
+}
+
+// SaveCycleCheckpoint saves a cycle checkpoint to disk.
+func (s *Store) SaveCycleCheckpoint(turnNum int, cp CycleCheckpoint) error {
+	if turnNum < 1 {
+		turnNum = 1
+	}
+	dir := filepath.Join(s.RunDir, fmt.Sprintf("turn-%d", turnNum), "cycle")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create %s: %w", dir, err)
+	}
+	filename := fmt.Sprintf("checkpoint-%s.json", cp.State)
+	return s.writeJSON(filepath.Join(dir, filename), cp)
+}
+
+// SaveCycleTranscript saves the final cycle transcript to disk.
+func (s *Store) SaveCycleTranscript(turnNum int, entries any) error {
+	if turnNum < 1 {
+		turnNum = 1
+	}
+	dir := filepath.Join(s.RunDir, fmt.Sprintf("turn-%d", turnNum), "cycle")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create %s: %w", dir, err)
+	}
+	return s.writeJSON(filepath.Join(dir, "transcript.json"), entries)
 }
 
 func (s *Store) appendLine(path string, line []byte) error {

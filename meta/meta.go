@@ -11,6 +11,7 @@ import (
 
 	"github.com/dre4success/tripartite/adapter"
 	"github.com/dre4success/tripartite/agent"
+	"github.com/dre4success/tripartite/cycle"
 	"github.com/dre4success/tripartite/display"
 	"github.com/dre4success/tripartite/logger"
 	"github.com/dre4success/tripartite/orchestrator"
@@ -27,6 +28,7 @@ type Turn struct {
 	Route      router.Result
 	Brainstorm *BrainstormResult
 	Delegate   *DelegateResult
+	Cycle      *CycleResult
 }
 
 // BrainstormResult holds the 3-round orchestration output.
@@ -41,6 +43,15 @@ type DelegateResult struct {
 	FinalText  string
 }
 
+// CycleResult holds a summarized outcome from the cycle state machine.
+type CycleResult struct {
+	CycleID        string
+	FinalState     string
+	Recommendation string
+	Elapsed        time.Duration
+	Error          string
+}
+
 // Config holds the configuration for a meta session.
 type Config struct {
 	Adapters     []adapter.Adapter
@@ -52,6 +63,7 @@ type Config struct {
 	Store        *store.Store
 	Logger       *logger.Logger
 	DefaultAgent string
+	CycleEnabled bool
 }
 
 // Start launches the interactive meta session REPL.
@@ -70,18 +82,67 @@ func Start(ctx context.Context, cfg Config) error {
 	fmt.Println("Tripartite meta session")
 	fmt.Printf("Adapters: %s\n", strings.Join(adapterNames, ", "))
 	fmt.Printf("Agents: %s\n", strings.Join(agentNames, ", "))
-	fmt.Println("Commands: /brainstorm, /delegate, /history, /help, /quit")
+	if cfg.CycleEnabled {
+		fmt.Println("Mode: cycle state machine (experimental)")
+		fmt.Println("Commands: /status, /approve, /deny, /stop, /history, /help, /quit")
+	} else {
+		fmt.Println("Commands: /brainstorm, /delegate, /history, /help, /quit")
+	}
 	fmt.Println()
+
+	// Shared approval broker for cycle ↔ REPL coordination.
+	var broker *cycle.ApprovalBroker
+	if cfg.CycleEnabled {
+		broker = cycle.NewApprovalBroker()
+	}
+
+	// Channels for async cycle results.
+	type cycleResult struct {
+		result *cycle.Result
+		err    error
+	}
+	var cycleDone chan cycleResult
+	var cycleCancel context.CancelFunc
+	var cycleRunning bool
+	var cyclePrompt string
+
+	consumeCycleResult := func(cr cycleResult) {
+		cycleRunning = false
+		summary := handleCycleResult(cr.result, cr.err)
+		if summary != nil {
+			turns = append(turns, Turn{
+				Prompt: cyclePrompt,
+				Route: router.Result{
+					Reason: "cycle state machine",
+				},
+				Cycle: summary,
+			})
+		}
+		cyclePrompt = ""
+		cycleCancel = nil
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("> ")
+		if cycleRunning {
+			fmt.Print("[cycle] > ")
+		} else {
+			fmt.Print("> ")
+		}
 		if !scanner.Scan() {
 			break
 		}
 
 		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
+			// Check if a cycle finished while we were waiting.
+			if cycleRunning {
+				select {
+				case cr := <-cycleDone:
+					consumeCycleResult(cr)
+				default:
+				}
+			}
 			continue
 		}
 
@@ -89,6 +150,9 @@ func Start(ctx context.Context, cfg Config) error {
 
 		switch cmd {
 		case "quit", "exit":
+			if cycleRunning && cycleCancel != nil {
+				cycleCancel()
+			}
 			fmt.Println("Ending session.")
 			return saveMetaSession(cfg, adapterNames, agentNames, turns)
 
@@ -98,6 +162,8 @@ func Start(ctx context.Context, cfg Config) error {
 				engine := "brainstorm"
 				if t.Delegate != nil {
 					engine = "delegate → " + t.Delegate.Agent
+				} else if t.Cycle != nil {
+					engine = "cycle"
 				}
 				fmt.Printf("  Turn %d [%s]: %s\n", i+1, engine, truncate(t.Prompt, 70))
 			}
@@ -106,9 +172,94 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "help":
 			printHelp()
+			if cfg.CycleEnabled {
+				printCycleHelp()
+			}
+			continue
+
+		case "status":
+			if !cfg.CycleEnabled {
+				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				continue
+			}
+			if !cycleRunning {
+				fmt.Println("No cycle is currently running.")
+				continue
+			}
+			pending := broker.Pending()
+			if len(pending) > 0 {
+				fmt.Println("Pending approvals:")
+				for _, pa := range pending {
+					fmt.Printf("  [%s] %s (scope: %s)\n", pa.TicketID, pa.Reason, pa.Scope)
+				}
+			} else {
+				fmt.Println("Cycle is running. No pending approvals.")
+			}
+			continue
+
+		case "approve":
+			if !cfg.CycleEnabled || broker == nil {
+				fmt.Println("Cycle mode not enabled.")
+				continue
+			}
+			ticketID := strings.TrimSpace(arg)
+			if ticketID == "" {
+				// Auto-approve the first pending ticket.
+				pending := broker.Pending()
+				if len(pending) == 0 {
+					fmt.Println("No pending approvals.")
+					continue
+				}
+				ticketID = pending[0].TicketID
+			}
+			if err := broker.Resolve(ticketID, true, ""); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			} else {
+				fmt.Printf("Approved: %s\n", ticketID)
+			}
+			continue
+
+		case "deny":
+			if !cfg.CycleEnabled || broker == nil {
+				fmt.Println("Cycle mode not enabled.")
+				continue
+			}
+			ticketID := strings.TrimSpace(arg)
+			if ticketID == "" {
+				pending := broker.Pending()
+				if len(pending) == 0 {
+					fmt.Println("No pending approvals.")
+					continue
+				}
+				ticketID = pending[0].TicketID
+			}
+			if err := broker.Resolve(ticketID, false, ""); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			} else {
+				fmt.Printf("Denied: %s\n", ticketID)
+			}
+			continue
+
+		case "stop":
+			if !cfg.CycleEnabled {
+				fmt.Println("Cycle mode not enabled.")
+				continue
+			}
+			if !cycleRunning {
+				fmt.Println("No cycle is currently running.")
+				continue
+			}
+			if cycleCancel != nil {
+				cycleCancel()
+				fmt.Println("Cycle stop requested.")
+			}
 			continue
 
 		case "brainstorm":
+			if cycleRunning {
+				fmt.Println("A cycle is currently running. Use /stop first.")
+				continue
+			}
 			if arg == "" {
 				fmt.Println("Usage: /brainstorm <prompt>")
 				continue
@@ -122,6 +273,10 @@ func Start(ctx context.Context, cfg Config) error {
 			continue
 
 		case "delegate":
+			if cycleRunning {
+				fmt.Println("A cycle is currently running. Use /stop first.")
+				continue
+			}
 			if arg == "" {
 				fmt.Println("Usage: /delegate [agent] <prompt>")
 				continue
@@ -140,7 +295,53 @@ func Start(ctx context.Context, cfg Config) error {
 			continue
 
 		default:
-			// Normal prompt — route automatically.
+			if cycleRunning {
+				// Check if cycle finished.
+				select {
+				case cr := <-cycleDone:
+					consumeCycleResult(cr)
+				default:
+					fmt.Println("A cycle is currently running. Use /status, /approve, /deny, or /stop.")
+					continue
+				}
+			}
+
+			if cfg.CycleEnabled {
+				// Launch cycle asynchronously.
+				turnNum := len(turns) + 1
+				cycleDone = make(chan cycleResult, 1)
+				var cycleCtx context.Context
+				cycleCtx, cycleCancel = context.WithCancel(ctx)
+				cycleRunning = true
+
+				cycleCfg := cycle.Config{
+					Prompt:       input,
+					Adapters:     cfg.Adapters,
+					Agents:       cfg.Agents,
+					Approval:     cfg.Approval,
+					Sandbox:      cfg.Sandbox,
+					Worktree:     cfg.Worktree,
+					Timeout:      cfg.Timeout,
+					Store:        cfg.Store,
+					Logger:       cfg.Logger,
+					DefaultAgent: cfg.DefaultAgent,
+					TurnNum:      turnNum,
+					Guards:       cycle.DefaultGuards(),
+					Broker:       broker,
+				}
+
+				go func() {
+					result, err := cycle.Run(cycleCtx, cycleCfg)
+					cycleDone <- cycleResult{result: result, err: err}
+				}()
+
+				cyclePrompt = input
+				fmt.Printf("[cycle] Started for: %q\n", truncate(input, 60))
+				fmt.Println("[cycle] Use /status to check progress, /approve or /deny for approvals.")
+				continue
+			}
+
+			// Legacy path — route automatically.
 			turn, err := RunOnce(ctx, cfg, input, turns, len(turns)+1)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -151,12 +352,36 @@ func Start(ctx context.Context, cfg Config) error {
 		}
 	}
 
+	if cycleRunning && cycleCancel != nil {
+		cycleCancel()
+	}
+
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("reading stdin: %w", err)
 	}
 
 	fmt.Println("\nEnd of input. Ending session.")
 	return saveMetaSession(cfg, adapterNames, agentNames, turns)
+}
+
+// RunOnceCycle processes a single prompt through the cycle state machine.
+// Used for one-shot --cycle mode.
+func RunOnceCycle(ctx context.Context, cfg Config, prompt string, turnNum int) (*cycle.Result, error) {
+	cycleCfg := cycle.Config{
+		Prompt:       prompt,
+		Adapters:     cfg.Adapters,
+		Agents:       cfg.Agents,
+		Approval:     cfg.Approval,
+		Sandbox:      cfg.Sandbox,
+		Worktree:     cfg.Worktree,
+		Timeout:      cfg.Timeout,
+		Store:        cfg.Store,
+		Logger:       cfg.Logger,
+		DefaultAgent: cfg.DefaultAgent,
+		TurnNum:      turnNum,
+		Guards:       cycle.DefaultGuards(),
+	}
+	return cycle.Run(ctx, cycleCfg)
 }
 
 // RunOnce processes a single prompt through the router and dispatches to the
@@ -535,6 +760,19 @@ func toOrchestratorHistory(turns []Turn) []orchestrator.Turn {
 					Content: t.Delegate.FinalText,
 				},
 			}}
+		} else if t.Cycle != nil {
+			content := t.Cycle.Recommendation
+			if content == "" && t.Cycle.Error != "" {
+				content = "[cycle error] " + t.Cycle.Error
+			}
+			if content != "" {
+				ot.Responses = [][]adapter.Response{{
+					{
+						Model:   "cycle",
+						Content: content,
+					},
+				}}
+			}
 		}
 
 		out = append(out, ot)
@@ -559,6 +797,12 @@ func saveMetaSession(cfg Config, adapterNames, agentNames []string, turns []Turn
 			st.Engine = "delegate"
 			st.Agent = t.Delegate.Agent
 			st.FinalText = t.Delegate.FinalText
+		} else if t.Cycle != nil {
+			st.Engine = "cycle"
+			st.CycleID = t.Cycle.CycleID
+			st.CycleState = t.Cycle.FinalState
+			st.FinalText = t.Cycle.Recommendation
+			st.Error = t.Cycle.Error
 		}
 		storeTurns[i] = st
 	}
@@ -580,6 +824,33 @@ func saveMetaSession(cfg Config, adapterNames, agentNames []string, turns []Turn
 	return nil
 }
 
+func handleCycleResult(result *cycle.Result, err error) *CycleResult {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[cycle] Error: %v\n", err)
+		return &CycleResult{
+			FinalState: "ABORTED",
+			Error:      err.Error(),
+		}
+	}
+	if result == nil {
+		fmt.Println("[cycle] Cycle completed (no result).")
+		return nil
+	}
+	fmt.Printf("\n[cycle] Completed: %s (state: %s, elapsed: %.1fs)\n",
+		result.CycleID, result.FinalState, result.Elapsed.Seconds())
+	recommendation := ""
+	if result.Decision != nil && result.Decision.Recommendation != "" {
+		recommendation = result.Decision.Recommendation
+		fmt.Println(recommendation)
+	}
+	return &CycleResult{
+		CycleID:        result.CycleID,
+		FinalState:     string(result.FinalState),
+		Recommendation: recommendation,
+		Elapsed:        result.Elapsed,
+	}
+}
+
 func printHelp() {
 	fmt.Println("Meta session commands:")
 	fmt.Println("  /brainstorm <prompt>       Force multi-agent brainstorm")
@@ -589,6 +860,15 @@ func printHelp() {
 	fmt.Println("  /quit, /exit               End session")
 	fmt.Println()
 	fmt.Println("Or just type a prompt — it will be auto-routed.")
+	fmt.Println()
+}
+
+func printCycleHelp() {
+	fmt.Println("Cycle commands:")
+	fmt.Println("  /status                    Show current cycle state")
+	fmt.Println("  /approve [ticket-id]       Approve pending approval")
+	fmt.Println("  /deny [ticket-id]          Deny pending approval")
+	fmt.Println("  /stop                      Cancel running cycle")
 	fmt.Println()
 }
 

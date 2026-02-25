@@ -56,6 +56,7 @@ func runMeta(prompt *string, args []string) {
 	defaultAgent := fs.String("default-agent", "claude", "Default delegate agent")
 	sandbox := fs.String("sandbox", "safe", "Delegate sandbox: safe|write|full")
 	worktreeEnabled := fs.Bool("worktree", false, "Run meta-session delegate turns in isolated git worktrees")
+	cycleEnabled := fs.Bool("cycle", false, "Enable task cycle state machine (experimental)")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
@@ -152,21 +153,54 @@ func runMeta(prompt *string, args []string) {
 		Store:        s,
 		Logger:       log,
 		DefaultAgent: *defaultAgent,
+		CycleEnabled: *cycleEnabled,
 	}
 
 	if prompt != nil {
 		// One-shot mode.
 		allModels := append(unified.AdapterNames, unified.AgentNames...)
+		mode := "meta-oneshot"
+		if *cycleEnabled {
+			mode = "meta-cycle-oneshot"
+		}
 		inputMeta := store.RunMeta{
 			Prompt:    *prompt,
 			Models:    allModels,
 			Timeout:   timeout.String(),
 			Timestamp: time.Now().Format(time.RFC3339),
-			Mode:      "meta-oneshot",
+			Mode:      mode,
 		}
 		if err := s.SaveInput(inputMeta); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to save input metadata: %v\n", err)
 			os.Exit(1)
+		}
+
+		if *cycleEnabled {
+			result, err := meta.RunOnceCycle(ctx, cfg, *prompt, 1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Printf("Run artifacts saved to: %s\n", s.RunDir)
+				os.Exit(1)
+			}
+			cycleTurn := store.MetaSessionTurn{
+				Prompt:     *prompt,
+				Engine:     "cycle",
+				CycleID:    result.CycleID,
+				CycleState: string(result.FinalState),
+			}
+			if result.Decision != nil {
+				cycleTurn.FinalText = result.Decision.Recommendation
+			}
+			if result.FinalState == "ABORTED" && cycleTurn.FinalText == "" {
+				cycleTurn.Error = "cycle aborted"
+			}
+			if err := s.SaveMetaSessionSummary(inputMeta, []store.MetaSessionTurn{cycleTurn}); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to save summary: %v\n", err)
+			}
+			fmt.Printf("\n[cycle] %s completed (state: %s, elapsed: %.1fs)\n",
+				result.CycleID, result.FinalState, result.Elapsed.Seconds())
+			fmt.Printf("Run artifacts saved to: %s\n", s.RunDir)
+			return
 		}
 
 		turn, err := meta.RunOnce(ctx, cfg, *prompt, nil, 1)
@@ -457,6 +491,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --default-agent string  Default delegate agent (default \"claude\")")
 	fmt.Fprintln(os.Stderr, "  --sandbox string        Delegate sandbox: safe|write|full (default \"safe\")")
 	fmt.Fprintln(os.Stderr, "  --worktree              Run meta-session delegate turns in isolated git worktrees")
+	fmt.Fprintln(os.Stderr, "  --cycle                 Enable task cycle state machine (experimental)")
 	fmt.Fprintln(os.Stderr, "  --runs-dir string       Directory for run artifacts (default \"./runs\")")
 	fmt.Fprintln(os.Stderr, "  --debug                 Print structured diagnostics to stderr")
 	fmt.Fprintln(os.Stderr, "  --allow-api-keys        Don't fail if API key env vars are set")

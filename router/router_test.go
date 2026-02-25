@@ -83,3 +83,43 @@ func TestClassifyCustomDefaultAgent(t *testing.T) {
 		t.Errorf("expected agent %q, got %q", "codex", got.Agent)
 	}
 }
+
+func TestClassifyTask(t *testing.T) {
+	cfg := Config{DefaultAgent: "claude"}
+
+	tests := []struct {
+		name     string
+		prompt   string
+		wantType TaskType
+	}{
+		// Pure action → code_change.
+		{name: "fix_action", prompt: "fix the auth bug", wantType: TaskCodeChange},
+		{name: "write_action", prompt: "write a unit test", wantType: TaskCodeChange},
+		{name: "implement_action", prompt: "implement the feature", wantType: TaskCodeChange},
+
+		// Pure analysis → discuss.
+		{name: "explain_analysis", prompt: "explain goroutines", wantType: TaskDiscuss},
+		{name: "compare_analysis", prompt: "compare REST vs gRPC", wantType: TaskDiscuss},
+		{name: "question_mark", prompt: "should we use Redis?", wantType: TaskDiscuss},
+
+		// Hybrid: both action + analysis words.
+		{name: "hybrid_review_fix", prompt: "review and fix the auth bug", wantType: TaskHybrid},
+		{name: "hybrid_explain_implement", prompt: "explain how to implement caching", wantType: TaskHybrid},
+		{name: "hybrid_analyze_update", prompt: "analyze and update the dependencies", wantType: TaskHybrid},
+
+		// Empty → discuss.
+		{name: "empty", prompt: "", wantType: TaskDiscuss},
+
+		// Fallback → discuss.
+		{name: "fallback", prompt: "goroutines and channels", wantType: TaskDiscuss},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyTask(tt.prompt, cfg)
+			if got.TaskType != tt.wantType {
+				t.Errorf("ClassifyTask(%q).TaskType = %q, want %q", tt.prompt, got.TaskType, tt.wantType)
+			}
+		})
+	}
+}
