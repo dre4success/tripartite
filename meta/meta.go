@@ -90,10 +90,12 @@ func Start(ctx context.Context, cfg Config) error {
 	}
 	fmt.Println()
 
-	// Shared approval broker for cycle ↔ REPL coordination.
+	// Shared approval broker and status provider for cycle ↔ REPL coordination.
 	var broker *cycle.ApprovalBroker
+	var statusProvider *cycle.StatusProvider
 	if cfg.CycleEnabled {
 		broker = cycle.NewApprovalBroker()
+		statusProvider = cycle.NewStatusProvider()
 	}
 
 	// Channels for async cycle results.
@@ -108,6 +110,9 @@ func Start(ctx context.Context, cfg Config) error {
 
 	consumeCycleResult := func(cr cycleResult) {
 		cycleRunning = false
+		if statusProvider != nil {
+			statusProvider.Clear()
+		}
 		summary := handleCycleResult(cr.result, cr.err)
 		if summary != nil {
 			turns = append(turns, Turn{
@@ -186,15 +191,7 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Println("No cycle is currently running.")
 				continue
 			}
-			pending := broker.Pending()
-			if len(pending) > 0 {
-				fmt.Println("Pending approvals:")
-				for _, pa := range pending {
-					fmt.Printf("  [%s] %s (scope: %s)\n", pa.TicketID, pa.Reason, pa.Scope)
-				}
-			} else {
-				fmt.Println("Cycle is running. No pending approvals.")
-			}
+			printCycleStatus(statusProvider, broker)
 			continue
 
 		case "approve":
@@ -328,6 +325,7 @@ func Start(ctx context.Context, cfg Config) error {
 					TurnNum:      turnNum,
 					Guards:       cycle.DefaultGuards(),
 					Broker:       broker,
+					Status:       statusProvider,
 				}
 
 				go func() {
@@ -877,4 +875,83 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+func truncateDesc(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
+}
+
+// printCycleStatus renders a rich /status display from the StatusProvider and broker.
+func printCycleStatus(sp *cycle.StatusProvider, broker *cycle.ApprovalBroker) {
+	var snap *cycle.CycleStatus
+	if sp != nil {
+		snap = sp.Snapshot()
+	}
+
+	separator := strings.Repeat("-", 50)
+	fmt.Println(separator)
+
+	if snap == nil {
+		fmt.Println("  Cycle is running (no status available yet).")
+		if broker != nil {
+			printPendingApprovals(broker)
+		}
+		fmt.Println(separator)
+		return
+	}
+
+	fmt.Printf("  Cycle: %s\n", snap.CycleID)
+	fmt.Printf("  State: %s (phase: %s)\n", snap.State, snap.Phase)
+	fmt.Printf("  Elapsed: %.1fs\n", snap.Elapsed.Seconds())
+
+	if snap.TaskType != "" {
+		fmt.Printf("  Task type: %s\n", snap.TaskType)
+	}
+
+	if snap.TotalSubtasks > 0 {
+		fmt.Printf("  Subtasks: %d/%d completed\n", snap.CompletedSubtasks, snap.TotalSubtasks)
+		if snap.CurrentSubtask != "" {
+			fmt.Printf("  Active: %s\n", snap.CurrentSubtask)
+		}
+		for _, st := range snap.Subtasks {
+			status := "pending"
+			if st.Completed {
+				status = "done"
+			} else if st.ID == snap.CurrentSubtask {
+				status = "active"
+			} else if st.Error != "" {
+				status = "error"
+			}
+			fmt.Printf("    %s [%s] %s (agent: %s)\n", st.ID, status, truncateDesc(st.Description, 50), st.Agent)
+		}
+	}
+
+	fmt.Printf("  Revisions: %d/%d\n", snap.RevisionCount, snap.MaxRevisions)
+	fmt.Printf("  Transcript entries: %d\n", snap.TranscriptLen)
+
+	if snap.LastError != "" {
+		fmt.Printf("  Last error: %s\n", snap.LastError)
+	}
+
+	if broker != nil {
+		printPendingApprovals(broker)
+	}
+
+	fmt.Println(separator)
+}
+
+// printPendingApprovals renders any pending approval tickets.
+func printPendingApprovals(broker *cycle.ApprovalBroker) {
+	pending := broker.Pending()
+	if len(pending) == 0 {
+		return
+	}
+	fmt.Println("  Pending approvals:")
+	for _, pa := range pending {
+		fmt.Printf("    [%s] %s (scope: %s)\n", pa.TicketID, pa.Reason, pa.Scope)
+		fmt.Printf("    Use /approve %s or /deny %s\n", pa.TicketID, pa.TicketID)
+	}
 }

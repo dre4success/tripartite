@@ -116,6 +116,7 @@ func generateCycleID() string {
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	cc := newCycleContext(cfg)
 	start := time.Now()
+	cc.startedAt = start
 
 	// Apply runtime timeout guard.
 	maxRuntime := cfg.Guards.MaxTotalRuntime
@@ -128,7 +129,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	for {
 		// Check context (covers both explicit cancel and MaxTotalRuntime).
 		if err := ctx.Err(); err != nil {
-			cc.transcript.Append(KindError, "coordinator", cc.state, "cycle timed out or cancelled")
+			cc.transcript.Append(KindError, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), "cycle timed out or cancelled")
 			cc.state = StateAborted
 			break
 		}
@@ -138,15 +139,16 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			break
 		}
 
-		// Checkpoint.
+		// Checkpoint + publish status.
 		if cfg.Store != nil {
 			checkpoint(cfg.Store, cfg.TurnNum, cc, time.Since(start))
 		}
+		cc.pushStatus()
 
 		// Handle current state.
 		if err := cc.handle(ctx); err != nil {
 			cc.lastError = err
-			cc.transcript.Append(KindError, "coordinator", cc.state, err.Error())
+			cc.transcript.Append(KindError, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), err.Error())
 			// For handler errors in non-EXECUTE states, abort.
 			if cc.state != StateExecute {
 				cc.state = StateAborted
@@ -155,16 +157,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 
 		// Deterministic transition.
-		prev := cc.state
-		cc.state = transition(cc.state, cc)
-		cc.transcript.Append(KindStateChange, "coordinator", cc.state, StateChangePayload{
-			From: prev,
-			To:   cc.state,
-		})
+		fromState := cc.state
+		cc.state = transition(fromState, cc)
+		cc.appendStateChange(fromState, cc.state)
 	}
 
-	// Final checkpoint.
+	// Final checkpoint + status.
 	elapsed := time.Since(start)
+	cc.pushStatus()
 	cc.finalizeWorktree()
 	if cfg.Store != nil {
 		checkpoint(cfg.Store, cfg.TurnNum, cc, elapsed)
@@ -179,4 +179,102 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		Decision:   cc.decision,
 		Elapsed:    elapsed,
 	}, nil
+}
+
+// publishStatus pushes a CycleStatus snapshot to the StatusProvider (if configured).
+func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
+	if cfg.Status == nil {
+		return
+	}
+
+	maxRevisions := cfg.Guards.MaxRevisionLoops
+	if maxRevisions == 0 {
+		maxRevisions = DefaultGuards().MaxRevisionLoops
+	}
+
+	pendingApprovals := 0
+	if cfg.Broker != nil {
+		pendingApprovals = len(cfg.Broker.Pending())
+	}
+
+	lastErr := ""
+	if cc.lastError != nil {
+		lastErr = cc.lastError.Error()
+	}
+
+	taskType := ""
+	intent := ""
+	if cc.intent != nil {
+		taskType = string(cc.intent.TaskType)
+		intent = cc.intent.NormalizedGoal
+	}
+
+	subtasks := buildSubtaskStatuses(cc)
+	completed := 0
+	for _, s := range subtasks {
+		if s.Completed {
+			completed++
+		}
+	}
+
+	cfg.Status.Update(CycleStatus{
+		CycleID:           cc.cycleID,
+		State:             cc.state,
+		Phase:             cc.currentPhase,
+		Pass:              cc.currentPass(),
+		StartedAt:         start,
+		Elapsed:           time.Since(start),
+		CurrentSubtask:    cc.currentSubtask,
+		TotalSubtasks:     len(subtasks),
+		CompletedSubtasks: completed,
+		Subtasks:          subtasks,
+		RevisionCount:     cc.revisionCount,
+		MaxRevisions:      maxRevisions,
+		RetryCount:        cc.retryCount,
+		PendingApprovals:  pendingApprovals,
+		LastError:         lastErr,
+		TaskType:          taskType,
+		Intent:            intent,
+		TranscriptLen:     cc.transcript.Len(),
+	})
+}
+
+func (cc *cycleContext) appendStateChange(fromState, toState State) {
+	cc.transcript.Append(KindStateChange, "coordinator", fromState, phaseName(fromState), cc.passForState(fromState), StateChangePayload{
+		From: fromState,
+		To:   toState,
+	})
+}
+
+// buildSubtaskStatuses iterates plan subtasks and checks for completed artifacts.
+func buildSubtaskStatuses(cc *cycleContext) []SubtaskStatus {
+	if cc.plan == nil {
+		return nil
+	}
+
+	statuses := make([]SubtaskStatus, 0, len(cc.plan.Subtasks))
+	for _, st := range cc.plan.Subtasks {
+		ss := SubtaskStatus{
+			ID:          st.ID,
+			Description: st.Description,
+			Agent:       st.Agent,
+			Revision:    cc.revisionCount,
+		}
+
+		// Check all revisions for a successful artifact.
+		for rev := cc.revisionCount; rev >= 0; rev-- {
+			if a := cc.latestArtifact(st.ID, rev); a != nil {
+				if a.Error == "" {
+					ss.Completed = true
+				} else {
+					ss.Error = a.Error
+				}
+				ss.Revision = rev
+				break
+			}
+		}
+
+		statuses = append(statuses, ss)
+	}
+	return statuses
 }

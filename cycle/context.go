@@ -2,6 +2,8 @@ package cycle
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"github.com/dre4success/tripartite/store"
 )
@@ -21,6 +23,12 @@ type cycleContext struct {
 	lastError     error
 	lastApproval  *PendingApproval
 	worktreeInfo  store.DelegateWorkspace
+	startedAt     time.Time
+	// Phase/pass tracking for transcript entries.
+	currentPhase          string
+	currentSubtask        string
+	outputReviewPassCount int
+	planReviewPassCount   int
 	// Brainstorm runs are phase-scoped so persisted artifacts do not overwrite.
 	planBrainstormRuns         int
 	planReviewBrainstormRuns   int
@@ -37,8 +45,44 @@ func newCycleContext(cfg Config) *cycleContext {
 	}
 }
 
+func phaseName(state State) string {
+	return strings.ToLower(string(state))
+}
+
+func (cc *cycleContext) passForState(state State) int {
+	switch state {
+	case StateOutputReview:
+		return cc.outputReviewPassCount
+	case StatePlanReview:
+		return cc.planReviewPassCount
+	default:
+		return 0
+	}
+}
+
+// currentPass returns the pass count for the current state.
+func (cc *cycleContext) currentPass() int {
+	return cc.passForState(cc.state)
+}
+
+func (cc *cycleContext) pushStatus() {
+	if cc.startedAt.IsZero() {
+		return
+	}
+	publishStatus(cc.cfg, cc, cc.startedAt)
+}
+
 // handle dispatches to the appropriate handler for the current state.
 func (cc *cycleContext) handle(ctx context.Context) error {
+	// Track phase and increment pass counters for review states.
+	cc.currentPhase = phaseName(cc.state)
+	switch cc.state {
+	case StateOutputReview:
+		cc.outputReviewPassCount++
+	case StatePlanReview:
+		cc.planReviewPassCount++
+	}
+
 	switch cc.state {
 	case StateInit:
 		return cc.handleInit(ctx)

@@ -45,13 +45,13 @@ func TestTransitionTable(t *testing.T) {
 		// OUTPUT_REVIEW transitions.
 		{name: "OUTPUT_REVIEW→DECISION_GATE_no_blockers", state: StateOutputReview, expected: StateDecisionGate},
 		{name: "OUTPUT_REVIEW→REVISE_with_blockers", state: StateOutputReview, setup: func(cc *cycleContext) {
-			cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, ReviewFindingPayload{
+			cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, "", 0, ReviewFindingPayload{
 				Severity: SeverityBlocker,
 				Summary:  "test blocker",
 			})
 		}, expected: StateRevise},
 		{name: "OUTPUT_REVIEW→DECISION_GATE_blockers_no_budget", state: StateOutputReview, setup: func(cc *cycleContext) {
-			cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, ReviewFindingPayload{
+			cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, "", 0, ReviewFindingPayload{
 				Severity: SeverityBlocker,
 				Summary:  "test blocker",
 			})
@@ -135,14 +135,14 @@ func TestConditionCheckers(t *testing.T) {
 			t.Error("empty transcript should have no blockers")
 		}
 
-		cc.transcript.Append(KindReviewFinding, "r", StateOutputReview, ReviewFindingPayload{
+		cc.transcript.Append(KindReviewFinding, "r", StateOutputReview, "", 0, ReviewFindingPayload{
 			Severity: SeverityInfo,
 		})
 		if cc.hasBlockers() {
 			t.Error("info findings should not count as blockers")
 		}
 
-		cc.transcript.Append(KindReviewFinding, "r", StateOutputReview, ReviewFindingPayload{
+		cc.transcript.Append(KindReviewFinding, "r", StateOutputReview, "", 0, ReviewFindingPayload{
 			Severity: SeverityBlocker,
 		})
 		if !cc.hasBlockers() {
@@ -184,21 +184,21 @@ func TestHasBlockersScopesToLatestOutputReview(t *testing.T) {
 	cc := newCycleContext(Config{Guards: DefaultGuards()})
 
 	// First OUTPUT_REVIEW pass has a blocker.
-	cc.transcript.Append(KindStateChange, "coordinator", StateOutputReview, StateChangePayload{
+	cc.transcript.Append(KindStateChange, "coordinator", StateOutputReview, "", 0, StateChangePayload{
 		From: StateExecute,
 		To:   StateOutputReview,
 	})
-	cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, ReviewFindingPayload{
+	cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, "", 0, ReviewFindingPayload{
 		Severity: SeverityBlocker,
 		Summary:  "old blocker",
 	})
-	cc.transcript.Append(KindStateChange, "coordinator", StateRevise, StateChangePayload{
+	cc.transcript.Append(KindStateChange, "coordinator", StateRevise, "", 0, StateChangePayload{
 		From: StateOutputReview,
 		To:   StateRevise,
 	})
 
 	// Second OUTPUT_REVIEW pass has no findings yet.
-	cc.transcript.Append(KindStateChange, "coordinator", StateOutputReview, StateChangePayload{
+	cc.transcript.Append(KindStateChange, "coordinator", StateOutputReview, "", 0, StateChangePayload{
 		From: StateRevise,
 		To:   StateOutputReview,
 	})
@@ -208,7 +208,7 @@ func TestHasBlockersScopesToLatestOutputReview(t *testing.T) {
 	}
 
 	// Add a current-pass blocker and confirm detection.
-	cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, ReviewFindingPayload{
+	cc.transcript.Append(KindReviewFinding, "reviewer", StateOutputReview, "", 0, ReviewFindingPayload{
 		Severity: SeverityBlocker,
 		Summary:  "current blocker",
 	})
@@ -243,4 +243,69 @@ func TestFillPlanDefaultsPermissions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStateChangeMetadataUsesSourcePhaseAndPass(t *testing.T) {
+	t.Run("output_review_pass_is_preserved", func(t *testing.T) {
+		cc := newCycleContext(Config{Guards: DefaultGuards()})
+		cc.state = StateOutputReview
+		cc.currentPhase = phaseName(StateOutputReview)
+		cc.outputReviewPassCount = 2
+
+		to := transition(cc.state, cc) // no blockers -> DECISION_GATE
+		cc.appendStateChange(cc.state, to)
+
+		e := cc.transcript.Last(KindStateChange)
+		if e == nil {
+			t.Fatal("expected state change entry")
+		}
+		if e.State != StateOutputReview {
+			t.Fatalf("entry.State = %s, want %s", e.State, StateOutputReview)
+		}
+		if e.Phase != "output_review" {
+			t.Fatalf("entry.Phase = %q, want %q", e.Phase, "output_review")
+		}
+		if e.Pass != 2 {
+			t.Fatalf("entry.Pass = %d, want 2", e.Pass)
+		}
+		payload, ok := e.Payload.(StateChangePayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want StateChangePayload", e.Payload)
+		}
+		if payload.From != StateOutputReview || payload.To != StateDecisionGate {
+			t.Fatalf("payload = %+v, want From=%s To=%s", payload, StateOutputReview, StateDecisionGate)
+		}
+	})
+
+	t.Run("plan_review_pass_is_preserved", func(t *testing.T) {
+		cc := newCycleContext(Config{Guards: DefaultGuards()})
+		cc.state = StatePlanReview
+		cc.currentPhase = phaseName(StatePlanReview)
+		cc.planReviewPassCount = 1
+		cc.plan = &PlanPayload{Permissions: "read"}
+
+		to := transition(cc.state, cc) // read -> EXECUTE
+		cc.appendStateChange(cc.state, to)
+
+		e := cc.transcript.Last(KindStateChange)
+		if e == nil {
+			t.Fatal("expected state change entry")
+		}
+		if e.State != StatePlanReview {
+			t.Fatalf("entry.State = %s, want %s", e.State, StatePlanReview)
+		}
+		if e.Phase != "plan_review" {
+			t.Fatalf("entry.Phase = %q, want %q", e.Phase, "plan_review")
+		}
+		if e.Pass != 1 {
+			t.Fatalf("entry.Pass = %d, want 1", e.Pass)
+		}
+		payload, ok := e.Payload.(StateChangePayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want StateChangePayload", e.Payload)
+		}
+		if payload.From != StatePlanReview || payload.To != StateExecute {
+			t.Fatalf("payload = %+v, want From=%s To=%s", payload, StatePlanReview, StateExecute)
+		}
+	})
 }

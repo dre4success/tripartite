@@ -42,7 +42,7 @@ func (cc *cycleContext) handleIntake(_ context.Context) error {
 		Roles:          roles,
 	}
 
-	cc.transcript.Append(KindIntent, "coordinator", cc.state, *cc.intent)
+	cc.transcript.Append(KindIntent, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), *cc.intent)
 	fmt.Printf("[cycle] INTAKE: task_type=%s, planner=%s, implementer=%s, reviewer=%s\n",
 		taskType, roles.Planner, roles.Implementer, roles.Reviewer)
 	return nil
@@ -79,7 +79,7 @@ func (cc *cycleContext) planViaBrainstorm(ctx context.Context, prompt string) er
 
 	cc.plan = parsePlanFromResponses(rounds)
 	cc.fillPlanDefaults()
-	cc.transcript.Append(KindPlan, "coordinator", cc.state, *cc.plan)
+	cc.transcript.Append(KindPlan, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), *cc.plan)
 	cc.printPlan()
 	return nil
 }
@@ -117,7 +117,7 @@ func (cc *cycleContext) planViaStream(ctx context.Context, prompt string) error 
 
 	cc.plan = parsePlanFromText(content.String())
 	cc.fillPlanDefaults()
-	cc.transcript.Append(KindPlan, a.Name(), cc.state, *cc.plan)
+	cc.transcript.Append(KindPlan, a.Name(), cc.state, cc.currentPhase, cc.currentPass(), *cc.plan)
 	cc.printPlan()
 	return nil
 }
@@ -147,7 +147,7 @@ func (cc *cycleContext) handlePlanReview(ctx context.Context) error {
 
 		findings := parseReviewFindings(rounds)
 		for _, f := range findings {
-			cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, f)
+			cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, cc.currentPhase, cc.currentPass(), f)
 		}
 		fmt.Printf("[cycle] PLAN_REVIEW: %d findings\n", len(findings))
 		return nil
@@ -184,7 +184,7 @@ func (cc *cycleContext) handlePlanReview(ctx context.Context) error {
 
 	findings := parseReviewFindingsFromText(a.Name(), content.String())
 	for _, f := range findings {
-		cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, f)
+		cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, cc.currentPhase, cc.currentPass(), f)
 	}
 	fmt.Printf("[cycle] PLAN_REVIEW: %d findings\n", len(findings))
 	return nil
@@ -199,10 +199,16 @@ func (cc *cycleContext) handleExecute(ctx context.Context) error {
 			cc.lastError = nil
 			return nil
 		}
+		cc.currentSubtask = "st-1"
+		cc.pushStatus()
 		if err := cc.executeSingleTask(ctx); err != nil {
+			cc.currentSubtask = ""
+			cc.pushStatus()
 			cc.retryCount["st-1"]++
 			return err
 		}
+		cc.currentSubtask = ""
+		cc.pushStatus()
 		cc.lastError = nil
 		return nil
 	}
@@ -217,11 +223,17 @@ func (cc *cycleContext) handleExecute(ctx context.Context) error {
 			continue
 		}
 
+		cc.currentSubtask = subtask.ID
+		cc.pushStatus()
 		fmt.Printf("[cycle] EXECUTE: subtask %s — %s\n", subtask.ID, subtask.Description)
 		if err := cc.executeSubtask(ctx, subtask, 0); err != nil {
+			cc.currentSubtask = ""
+			cc.pushStatus()
 			cc.retryCount[subtask.ID]++
 			return fmt.Errorf("subtask %s: %w", subtask.ID, err)
 		}
+		cc.currentSubtask = ""
+		cc.pushStatus()
 	}
 
 	cc.lastError = nil
@@ -290,7 +302,7 @@ func (cc *cycleContext) executeSubtask(ctx context.Context, subtask Subtask, rev
 	if err != nil {
 		artifact.Error = err.Error()
 	}
-	cc.transcript.Append(KindArtifact, a.Name(), cc.state, artifact)
+	cc.transcript.Append(KindArtifact, a.Name(), cc.state, cc.currentPhase, cc.currentPass(), artifact)
 	return err
 }
 
@@ -328,7 +340,7 @@ func (cc *cycleContext) handleOutputReview(ctx context.Context) error {
 
 		findings := parseReviewFindings(rounds)
 		for _, f := range findings {
-			cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, f)
+			cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, cc.currentPhase, cc.currentPass(), f)
 		}
 		blockers := filterBlockerFindings(findings)
 		fmt.Printf("[cycle] OUTPUT_REVIEW: %d findings (%d blockers)\n", len(findings), len(blockers))
@@ -366,7 +378,7 @@ func (cc *cycleContext) handleOutputReview(ctx context.Context) error {
 
 	findings := parseReviewFindingsFromText(a.Name(), content.String())
 	for _, f := range findings {
-		cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, f)
+		cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, cc.currentPhase, cc.currentPass(), f)
 	}
 	blockers := filterBlockerFindings(findings)
 	fmt.Printf("[cycle] OUTPUT_REVIEW: %d findings (%d blockers)\n", len(findings), len(blockers))
@@ -409,10 +421,14 @@ func (cc *cycleContext) handleRevise(ctx context.Context) error {
 			continue
 		}
 
+		cc.currentSubtask = subtask.ID
+		cc.pushStatus()
 		prompt := buildRevisionPrompt(subtask, sbs, cc.transcript)
 		var content strings.Builder
 		execCwd, err := cc.executionCwd(ctx, subtask)
 		if err != nil {
+			cc.currentSubtask = ""
+			cc.pushStatus()
 			return err
 		}
 
@@ -447,7 +463,9 @@ func (cc *cycleContext) handleRevise(ctx context.Context) error {
 		if err != nil {
 			artifact.Error = err.Error()
 		}
-		cc.transcript.Append(KindArtifact, a.Name(), cc.state, artifact)
+		cc.transcript.Append(KindArtifact, a.Name(), cc.state, cc.currentPhase, cc.currentPass(), artifact)
+		cc.currentSubtask = ""
+		cc.pushStatus()
 	}
 
 	return nil
@@ -465,7 +483,7 @@ func (cc *cycleContext) handleDecisionGate(_ context.Context) error {
 		Tradeoffs:      tradeoffs,
 	}
 
-	cc.transcript.Append(KindDecision, "coordinator", cc.state, *cc.decision)
+	cc.transcript.Append(KindDecision, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), *cc.decision)
 
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Println("  DECISION GATE")
@@ -497,12 +515,13 @@ func (cc *cycleContext) handleAwaitApproval(ctx context.Context) error {
 		cc.resumeState,
 	)
 
-	cc.transcript.Append(KindApprovalRequest, "coordinator", cc.state, ApprovalRequestPayload{
+	cc.transcript.Append(KindApprovalRequest, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), ApprovalRequestPayload{
 		TicketID:    pa.TicketID,
 		Reason:      pa.Reason,
 		Scope:       pa.Scope,
 		ResumeState: pa.ResumeState,
 	})
+	cc.pushStatus()
 
 	fmt.Printf("[cycle] AWAIT_APPROVAL: waiting for operator (ticket %s)\n", pa.TicketID)
 	fmt.Printf("  Reason: %s\n", pa.Reason)
@@ -514,11 +533,12 @@ func (cc *cycleContext) handleAwaitApproval(ctx context.Context) error {
 	}
 
 	cc.lastApproval = resolved
-	cc.transcript.Append(KindApprovalResult, "operator", cc.state, ApprovalResultPayload{
+	cc.transcript.Append(KindApprovalResult, "operator", cc.state, cc.currentPhase, cc.currentPass(), ApprovalResultPayload{
 		TicketID: resolved.TicketID,
 		Approved: resolved.Approved,
 		Comment:  resolved.Comment,
 	})
+	cc.pushStatus()
 
 	if resolved.Approved {
 		fmt.Printf("[cycle] APPROVED: %s\n", resolved.TicketID)

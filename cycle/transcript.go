@@ -29,6 +29,8 @@ type Entry struct {
 	Timestamp time.Time `json:"timestamp"`
 	Agent     string    `json:"agent,omitempty"`
 	State     State     `json:"state"`
+	Phase     string    `json:"phase,omitempty"`
+	Pass      int       `json:"pass,omitempty"`
 	Payload   any       `json:"payload"`
 }
 
@@ -145,7 +147,7 @@ func NewTranscript() *Transcript {
 }
 
 // Append adds an entry and returns the new entry (with assigned ID and timestamp).
-func (t *Transcript) Append(kind EntryKind, agent string, state State, payload any) Entry {
+func (t *Transcript) Append(kind EntryKind, agent string, state State, phase string, pass int, payload any) Entry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -155,6 +157,8 @@ func (t *Transcript) Append(kind EntryKind, agent string, state State, payload a
 		Timestamp: time.Now(),
 		Agent:     agent,
 		State:     state,
+		Phase:     phase,
+		Pass:      pass,
 		Payload:   payload,
 	}
 	t.nextID++
@@ -194,6 +198,20 @@ func (t *Transcript) ByKind(kind EntryKind) []Entry {
 	var out []Entry
 	for _, e := range t.entries {
 		if e.Kind == kind {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ByKindAndPass returns entries matching the given kind, phase, and pass number.
+func (t *Transcript) ByKindAndPass(kind EntryKind, phase string, pass int) []Entry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	var out []Entry
+	for _, e := range t.entries {
+		if e.Kind == kind && e.Phase == phase && e.Pass == pass {
 			out = append(out, e)
 		}
 	}

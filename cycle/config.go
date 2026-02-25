@@ -24,6 +24,7 @@ type Config struct {
 	TurnNum      int
 	Guards       Guards
 	Broker       *ApprovalBroker
+	Status       *StatusProvider
 }
 
 // Guards holds safety limits for cycle execution.
