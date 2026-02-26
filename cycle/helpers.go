@@ -2,7 +2,6 @@ package cycle
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +13,19 @@ import (
 	"github.com/dre4success/tripartite/store"
 	"github.com/dre4success/tripartite/workspace"
 )
+
+const (
+	decisionActionApplyWorktreeFF = "apply_worktree_branch_ff"
+	decisionActionAcceptResult    = "accept_result"
+	decisionActionKeepProposal    = "keep_proposal"
+)
+
+type decisionActionPlan struct {
+	Actions []string
+	Approve string
+	Deny    string
+	Note    string
+}
 
 // assignRoles maps agents/adapters to planner, implementer, and reviewer roles.
 func assignRoles(agents []agent.Agent, adapters []adapter.Adapter, taskType TaskType) RoleMap {
@@ -65,16 +77,6 @@ func findAgentByName(agents []agent.Agent, name string) agent.Agent {
 	return nil
 }
 
-// adapterByName returns the adapter matching the given name, or nil.
-func adapterByName(adapters []adapter.Adapter, name string) adapter.Adapter {
-	for _, a := range adapters {
-		if a.Name() == name {
-			return a
-		}
-	}
-	return nil
-}
-
 // collectAdapterNames returns adapter names.
 func collectAdapterNames(adapters []adapter.Adapter) []string {
 	names := make([]string, len(adapters))
@@ -91,12 +93,6 @@ func collectAgentNames(agents []agent.Agent) []string {
 		names[i] = a.Name()
 	}
 	return names
-}
-
-// filterWriteCapable returns agents whose name matches subtasks needing write.
-func filterWriteCapable(agents []agent.Agent) []agent.Agent {
-	// All agents are write-capable when given appropriate sandbox permissions.
-	return agents
 }
 
 // checkpoint saves cycle state to the store.
@@ -224,14 +220,21 @@ func (cc *cycleContext) finalizeWorktree() {
 	if !cc.worktreeInfo.Enabled || cc.worktreeInfo.WorktreePath == "" {
 		return
 	}
-
 	inspectCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	head, commits, err := workspace.Inspect(inspectCtx, cc.worktreeInfo.WorktreePath, cc.worktreeInfo.BaseCommit)
-	if err != nil {
+	if err := cc.refreshWorktreeInspect(inspectCtx); err != nil {
 		fmt.Printf("[warn] failed to inspect cycle worktree commits: %v\n", err)
-		return
+	}
+}
+
+func (cc *cycleContext) refreshWorktreeInspect(ctx context.Context) error {
+	if !cc.worktreeInfo.Enabled || cc.worktreeInfo.WorktreePath == "" {
+		return nil
+	}
+
+	head, commits, err := workspace.Inspect(ctx, cc.worktreeInfo.WorktreePath, cc.worktreeInfo.BaseCommit)
+	if err != nil {
+		return err
 	}
 
 	cc.worktreeInfo.HeadCommit = head
@@ -243,6 +246,87 @@ func (cc *cycleContext) finalizeWorktree() {
 		})
 	}
 	cc.saveWorktreeMetadata()
+	return nil
+}
+
+func (cc *cycleContext) planDecisionActions() decisionActionPlan {
+	plan := decisionActionPlan{
+		Actions: []string{decisionActionAcceptResult, decisionActionKeepProposal},
+		Approve: decisionActionAcceptResult,
+		Deny:    decisionActionKeepProposal,
+	}
+
+	if !cc.requiresOperatorDecision() {
+		plan.Actions = []string{decisionActionAcceptResult}
+		plan.Deny = ""
+		return plan
+	}
+
+	if !cc.worktreeInfo.Enabled || cc.worktreeInfo.Branch == "" {
+		plan.Note = "No cycle worktree branch available to apply; operator can accept the result or keep it as a proposal."
+		return plan
+	}
+
+	if len(cc.worktreeInfo.Commits) == 0 {
+		plan.Note = "Cycle worktree has no commits to apply automatically; operator can accept the result or keep it as a proposal."
+		return plan
+	}
+
+	plan.Actions = []string{decisionActionApplyWorktreeFF, decisionActionAcceptResult, decisionActionKeepProposal}
+	plan.Approve = decisionActionApplyWorktreeFF
+	plan.Deny = decisionActionKeepProposal
+	plan.Note = fmt.Sprintf("Operator can /approve to fast-forward merge %q or /deny to keep the proposal without applying.", cc.worktreeInfo.Branch)
+	return plan
+}
+
+func (cc *cycleContext) decisionApprovalRequest() (reason, scope string) {
+	scope = string(cc.state)
+	if !cc.isDecisionApproval() {
+		return fmt.Sprintf("Cycle needs approval to proceed to %s", cc.resumeState), scope
+	}
+
+	approveAction := cc.decisionApproveAction
+	if approveAction == "" {
+		approveAction = decisionActionAcceptResult
+	}
+	denyAction := cc.decisionDenyAction
+	if denyAction == "" {
+		denyAction = decisionActionKeepProposal
+	}
+
+	scope = "decision_gate"
+	return fmt.Sprintf("Decision required: /approve => %s, /deny => %s", approveAction, denyAction), scope
+}
+
+func (cc *cycleContext) runDecisionAction(ctx context.Context, action string) error {
+	if action == "" {
+		return nil
+	}
+
+	var summary string
+	switch action {
+	case decisionActionAcceptResult:
+		summary = "decision action: accepted cycle result without applying changes"
+		fmt.Println("[cycle] Decision action: accepted result (no apply)")
+	case decisionActionKeepProposal:
+		summary = "decision action: kept result as proposal (no apply)"
+		fmt.Println("[cycle] Decision action: kept proposal (no apply)")
+	case decisionActionApplyWorktreeFF:
+		if !cc.worktreeInfo.Enabled || cc.worktreeInfo.Branch == "" {
+			return fmt.Errorf("decision action %q unavailable: no worktree branch", action)
+		}
+		repoRoot := resolveCwd(Subtask{}, cc.cfg)
+		if err := workspace.MergeBranchFF(ctx, repoRoot, cc.worktreeInfo.Branch); err != nil {
+			return fmt.Errorf("apply worktree branch %q: %w", cc.worktreeInfo.Branch, err)
+		}
+		summary = fmt.Sprintf("decision action: applied worktree branch %q via fast-forward merge", cc.worktreeInfo.Branch)
+		fmt.Printf("[cycle] Decision action: applied worktree branch %s (ff-only)\n", cc.worktreeInfo.Branch)
+	default:
+		return fmt.Errorf("unknown decision action %q", action)
+	}
+
+	cc.transcript.Append(KindClaim, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), summary)
+	return nil
 }
 
 // resolveCwd determines the working directory for a subtask.
@@ -259,17 +343,6 @@ func filterBlockerFindings(findings []ReviewFindingPayload) []ReviewFindingPaylo
 	var out []ReviewFindingPayload
 	for _, f := range findings {
 		if f.Severity == SeverityBlocker {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-// findingsForSubtask returns findings targeting a specific subtask.
-func findingsForSubtask(findings []ReviewFindingPayload, subtaskID string) []ReviewFindingPayload {
-	var out []ReviewFindingPayload
-	for _, f := range findings {
-		if f.Target == subtaskID {
 			out = append(out, f)
 		}
 	}
@@ -307,27 +380,6 @@ func buildPatchSummary(cc *cycleContext) string {
 		}
 	}
 	return fmt.Sprintf("%d artifact(s): %s", len(parts), join(parts, ", "))
-}
-
-// cycleDir returns the storage directory for a cycle checkpoint.
-func cycleDir(s *store.Store, turnNum int) (string, error) {
-	if turnNum < 1 {
-		turnNum = 1
-	}
-	dir := filepath.Join(s.RunDir, fmt.Sprintf("turn-%d", turnNum), "cycle")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create %s: %w", dir, err)
-	}
-	return dir, nil
-}
-
-// writeJSON writes v as indented JSON to path.
-func writeJSON(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("json marshal: %w", err)
-	}
-	return os.WriteFile(path, data, 0o644)
 }
 
 func join(parts []string, sep string) string {

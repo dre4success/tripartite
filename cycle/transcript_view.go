@@ -173,7 +173,7 @@ func (t *Transcript) PhaseBoardSummary(phase string, pass int, roles *RoleMap) *
 	}
 	items := make([]sortable, 0, len(perAgent))
 	for _, p := range perAgent {
-		items = append(items, sortable{id: p.id, item: p.item})
+		items = append(items, sortable(p))
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -269,6 +269,11 @@ func summarizeTranscriptEntry(e Entry) string {
 	case KindDecision:
 		if p, ok := e.Payload.(DecisionPayload); ok {
 			return truncateInline(firstNonEmptyLine(p.Recommendation), 100)
+		}
+	case KindClaim:
+		switch p := e.Payload.(type) {
+		case string:
+			return truncateInline(p, 100)
 		}
 	case KindApprovalRequest:
 		if p, ok := e.Payload.(ApprovalRequestPayload); ok {
