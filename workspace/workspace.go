@@ -108,6 +108,33 @@ func Inspect(ctx context.Context, worktreePath, baseCommit string) (string, []Co
 	return head, commits, nil
 }
 
+// MergeBranchFF fast-forwards repoRoot to the given branch.
+// It is used by cycle decision-gate apply actions after operator approval.
+func MergeBranchFF(ctx context.Context, repoRoot, branch string) error {
+	if repoRoot == "" {
+		return fmt.Errorf("repo root is required")
+	}
+	if strings.TrimSpace(branch) == "" {
+		return fmt.Errorf("branch is required")
+	}
+	if err := ensureGitRepo(ctx, repoRoot); err != nil {
+		return err
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "merge", "--ff-only", branch)
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(out.String())
+		}
+		return fmt.Errorf("git merge --ff-only failed: %v (%s)", err, msg)
+	}
+	return nil
+}
+
 func currentCommit(ctx context.Context, repoPath string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "rev-parse", "HEAD")
 	var out, stderr bytes.Buffer

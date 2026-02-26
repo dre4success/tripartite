@@ -10,20 +10,22 @@ import (
 
 // cycleContext holds the mutable state for a single cycle run.
 type cycleContext struct {
-	cycleID       string
-	state         State
-	cfg           Config
-	transcript    *Transcript
-	intent        *IntentPayload
-	plan          *PlanPayload
-	decision      *DecisionPayload
-	revisionCount int
-	retryCount    map[string]int // subtask ID → retry count
-	resumeState   State          // state to resume after AWAIT_APPROVAL
-	lastError     error
-	lastApproval  *PendingApproval
-	worktreeInfo  store.DelegateWorkspace
-	startedAt     time.Time
+	cycleID               string
+	state                 State
+	cfg                   Config
+	transcript            *Transcript
+	intent                *IntentPayload
+	plan                  *PlanPayload
+	decision              *DecisionPayload
+	decisionApproveAction string
+	decisionDenyAction    string
+	revisionCount         int
+	retryCount            map[string]int // subtask ID → retry count
+	resumeState           State          // state to resume after AWAIT_APPROVAL
+	lastError             error
+	lastApproval          *PendingApproval
+	worktreeInfo          store.DelegateWorkspace
+	startedAt             time.Time
 	// Phase/pass tracking for transcript entries.
 	currentPhase          string
 	currentSubtask        string
@@ -174,7 +176,19 @@ func (cc *cycleContext) approvalDenied() bool {
 	if cc.lastApproval == nil {
 		return false
 	}
-	return !cc.lastApproval.Approved
+	if cc.lastApproval.Approved {
+		return false
+	}
+	// Denying the final decision gate means "keep proposal" rather than aborting
+	// the cycle. Permission approvals still abort on deny.
+	if cc.lastApproval.Scope == decisionGateApprovalScope {
+		return false
+	}
+	return true
+}
+
+func (cc *cycleContext) isDecisionApproval() bool {
+	return cc.resumeState == StateDone && cc.decision != nil
 }
 
 // latestReviewFindings returns review findings for the most recent visit to the given state.

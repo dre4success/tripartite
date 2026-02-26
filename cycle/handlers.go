@@ -472,15 +472,25 @@ func (cc *cycleContext) handleRevise(ctx context.Context) error {
 }
 
 // handleDecisionGate produces a recommendation and displays it.
-func (cc *cycleContext) handleDecisionGate(_ context.Context) error {
+func (cc *cycleContext) handleDecisionGate(ctx context.Context) error {
+	if err := cc.refreshWorktreeInspect(ctx); err != nil {
+		// Decision gate should still complete even if worktree introspection fails.
+		fmt.Printf("[warn] unable to inspect cycle worktree for decision actions: %v\n", err)
+	}
+
 	recommendation := buildRecommendation(cc)
 	tradeoffs := extractTradeoffs(cc)
 	patchSummary := buildPatchSummary(cc)
+	actionPlan := cc.planDecisionActions()
+	cc.decisionApproveAction = actionPlan.Approve
+	cc.decisionDenyAction = actionPlan.Deny
 
 	cc.decision = &DecisionPayload{
 		Recommendation: recommendation,
 		PatchSummary:   patchSummary,
 		Tradeoffs:      tradeoffs,
+		Note:           actionPlan.Note,
+		Actions:        actionPlan.Actions,
 	}
 
 	cc.transcript.Append(KindDecision, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), *cc.decision)
@@ -495,6 +505,23 @@ func (cc *cycleContext) handleDecisionGate(_ context.Context) error {
 			fmt.Printf("- %s\n", t)
 		}
 	}
+	if actionPlan.Note != "" {
+		fmt.Println("## Operator Note")
+		fmt.Printf("- %s\n", actionPlan.Note)
+	}
+	if len(actionPlan.Actions) > 0 {
+		fmt.Println("## Actions")
+		for _, a := range actionPlan.Actions {
+			fmt.Printf("- %s\n", a)
+		}
+		if cc.requiresOperatorDecision() {
+			line := fmt.Sprintf("Operator decision: /approve => %s", cc.decisionApproveAction)
+			if cc.decisionDenyAction != "" {
+				line += fmt.Sprintf(" | /deny => %s", cc.decisionDenyAction)
+			}
+			fmt.Println(line)
+		}
+	}
 	fmt.Println(strings.Repeat("=", 60))
 
 	return nil
@@ -506,14 +533,16 @@ func (cc *cycleContext) handleAwaitApproval(ctx context.Context) error {
 	if broker == nil {
 		// No broker — auto-approve.
 		fmt.Println("[cycle] AWAIT_APPROVAL: auto-approved (no broker)")
+		if cc.isDecisionApproval() && cc.decisionApproveAction != "" {
+			if err := cc.runDecisionAction(ctx, cc.decisionApproveAction); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
-	pa := broker.Request(
-		fmt.Sprintf("Cycle needs approval to proceed to %s", cc.resumeState),
-		string(cc.state),
-		cc.resumeState,
-	)
+	reason, scope := cc.decisionApprovalRequest()
+	pa := broker.Request(reason, scope, cc.resumeState)
 
 	cc.transcript.Append(KindApprovalRequest, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), ApprovalRequestPayload{
 		TicketID:    pa.TicketID,
@@ -542,8 +571,18 @@ func (cc *cycleContext) handleAwaitApproval(ctx context.Context) error {
 
 	if resolved.Approved {
 		fmt.Printf("[cycle] APPROVED: %s\n", resolved.TicketID)
+		if cc.isDecisionApproval() && cc.decisionApproveAction != "" {
+			if err := cc.runDecisionAction(ctx, cc.decisionApproveAction); err != nil {
+				return err
+			}
+		}
 	} else {
 		fmt.Printf("[cycle] DENIED: %s\n", resolved.TicketID)
+		if cc.isDecisionApproval() && cc.decisionDenyAction != "" {
+			if err := cc.runDecisionAction(ctx, cc.decisionDenyAction); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

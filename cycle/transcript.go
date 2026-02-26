@@ -109,6 +109,7 @@ type DecisionPayload struct {
 	Recommendation string   `json:"recommendation"`
 	PatchSummary   string   `json:"patch_summary"`
 	Tradeoffs      []string `json:"tradeoffs,omitempty"`
+	Note           string   `json:"note,omitempty"`
 	Actions        []string `json:"actions,omitempty"`
 }
 

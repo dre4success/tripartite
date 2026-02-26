@@ -2,9 +2,11 @@ package cycle
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/dre4success/tripartite/adapter"
+	"github.com/dre4success/tripartite/store"
 )
 
 func TestTransitionTable(t *testing.T) {
@@ -242,6 +244,57 @@ func TestFillPlanDefaultsPermissions(t *testing.T) {
 				t.Fatalf("permissions = %q, want %q", cc.plan.Permissions, tt.wantPerms)
 			}
 		})
+	}
+}
+
+func TestPlanDecisionActions(t *testing.T) {
+	t.Run("worktree_with_commits_prefers_apply_on_approve", func(t *testing.T) {
+		cc := newCycleContext(Config{})
+		cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+		cc.worktreeInfo.Enabled = true
+		cc.worktreeInfo.Branch = "tripartite/test/claude"
+		cc.worktreeInfo.Commits = []store.DelegateCommit{{SHA: "abc123", Subject: "feat: test"}}
+
+		got := cc.planDecisionActions()
+
+		if got.Approve != decisionActionApplyWorktreeFF {
+			t.Fatalf("Approve = %q, want %q", got.Approve, decisionActionApplyWorktreeFF)
+		}
+		if got.Deny != decisionActionKeepProposal {
+			t.Fatalf("Deny = %q, want %q", got.Deny, decisionActionKeepProposal)
+		}
+		wantActions := []string{decisionActionApplyWorktreeFF, decisionActionAcceptResult, decisionActionKeepProposal}
+		if !reflect.DeepEqual(got.Actions, wantActions) {
+			t.Fatalf("Actions = %#v, want %#v", got.Actions, wantActions)
+		}
+	})
+
+	t.Run("no_worktree_keeps_accept_or_proposal", func(t *testing.T) {
+		cc := newCycleContext(Config{})
+		cc.intent = &IntentPayload{TaskType: TaskHybrid}
+
+		got := cc.planDecisionActions()
+
+		if got.Approve != decisionActionAcceptResult {
+			t.Fatalf("Approve = %q, want %q", got.Approve, decisionActionAcceptResult)
+		}
+		if got.Deny != decisionActionKeepProposal {
+			t.Fatalf("Deny = %q, want %q", got.Deny, decisionActionKeepProposal)
+		}
+	})
+}
+
+func TestDecisionApprovalDenyDoesNotAbort(t *testing.T) {
+	cc := newCycleContext(Config{})
+	cc.decision = &DecisionPayload{}
+	cc.resumeState = StateDone
+	cc.lastApproval = &PendingApproval{Approved: false, Scope: decisionGateApprovalScope}
+
+	if cc.approvalDenied() {
+		t.Fatal("approvalDenied should be false for denied decision-gate approval")
+	}
+	if got := transition(StateAwaitApproval, cc); got != StateDone {
+		t.Fatalf("transition(AWAIT_APPROVAL) = %s, want %s", got, StateDone)
 	}
 }
 
