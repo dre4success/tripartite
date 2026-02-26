@@ -139,3 +139,42 @@ func TestTranscriptPhaseBoardSummaryNilWhenEmpty(t *testing.T) {
 		t.Fatalf("PhaseBoardSummary() = %+v, want nil", *got)
 	}
 }
+
+func TestTranscriptRecentTimeline(t *testing.T) {
+	tr := NewTranscript()
+	roles := &RoleMap{
+		Planner:     "claude",
+		Implementer: "codex",
+		Reviewer:    "gemini",
+	}
+
+	tr.Append(KindStateChange, "coordinator", StatePlan, "plan", 0, StateChangePayload{From: StateIntake, To: StatePlan})
+	tr.Append(KindIntent, "coordinator", StateIntake, "intake", 0, IntentPayload{NormalizedGoal: "refactor auth"})
+	tr.Append(KindPlan, "claude", StatePlan, "plan", 0, PlanPayload{Subtasks: []Subtask{{ID: "st-1"}}, Permissions: "edit"})
+	tr.Append(KindReviewFinding, "gemini", StatePlanReview, "plan_review", 1, ReviewFindingPayload{
+		Reviewer: "gemini", Severity: SeverityWarn, Target: "st-1", Summary: "clarify migration ordering",
+	})
+	tr.Append(KindArtifact, "codex", StateExecute, "execute", 0, ArtifactPayload{SubtaskID: "st-1", Revision: 0})
+	tr.Append(KindApprovalRequest, "coordinator", StateAwaitApproval, "await_approval", 0, ApprovalRequestPayload{
+		TicketID: "tk-1", Reason: "need approval", Scope: "execute",
+	})
+
+	got := tr.RecentTimeline(4, roles)
+	if len(got) != 4 {
+		t.Fatalf("RecentTimeline len = %d, want 4", len(got))
+	}
+
+	// Oldest -> newest among the selected events.
+	if got[0].Kind != KindPlan || got[0].Agent != "claude" || got[0].Role != "planner" {
+		t.Fatalf("event[0] = %+v, want planner plan", got[0])
+	}
+	if got[1].Kind != KindReviewFinding || got[1].Agent != "gemini" || got[1].Role != "reviewer" {
+		t.Fatalf("event[1] = %+v, want reviewer finding", got[1])
+	}
+	if got[2].Kind != KindArtifact || got[2].Agent != "codex" || got[2].Role != "implementer" {
+		t.Fatalf("event[2] = %+v, want implementer artifact", got[2])
+	}
+	if got[3].Kind != KindApprovalRequest || got[3].Agent != "coordinator" || got[3].Role != "coordinator" {
+		t.Fatalf("event[3] = %+v, want coordinator approval_request", got[3])
+	}
+}

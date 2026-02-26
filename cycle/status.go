@@ -39,6 +39,8 @@ type CycleStatus struct {
 	LastTranscript    TranscriptStatusSummary `json:"last_transcript,omitempty"`
 	CurrentReview     *ReviewPassStats        `json:"current_review,omitempty"`
 	CurrentBoard      *PhaseBoardSummary      `json:"current_board,omitempty"`
+	RecentTimeline    []TimelineEvent         `json:"recent_timeline,omitempty"`
+	RecentTimelineCap int                     `json:"recent_timeline_cap,omitempty"`
 }
 
 // StatusProvider is a thread-safe snapshot store.
@@ -78,6 +80,10 @@ func cloneCycleStatus(s CycleStatus) CycleStatus {
 			copy(bc.Items, s.CurrentBoard.Items)
 		}
 		cp.CurrentBoard = &bc
+	}
+	if s.RecentTimeline != nil {
+		cp.RecentTimeline = make([]TimelineEvent, len(s.RecentTimeline))
+		copy(cp.RecentTimeline, s.RecentTimeline)
 	}
 	return cp
 }

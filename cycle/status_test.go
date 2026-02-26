@@ -77,6 +77,9 @@ func TestStatusProviderSnapshotCopyIsolation(t *testing.T) {
 				{Role: "reviewer", Agent: "reviewer", Kind: KindReviewFinding, Summary: "old"},
 			},
 		},
+		RecentTimeline: []TimelineEvent{
+			{ID: 1, Phase: "plan", Role: "planner", Agent: "claude", Kind: KindPlan, Summary: "plan summary"},
+		},
 		Subtasks: []SubtaskStatus{
 			{ID: "st-1", Completed: false},
 		},
@@ -90,6 +93,7 @@ func TestStatusProviderSnapshotCopyIsolation(t *testing.T) {
 	snap.Subtasks[0].Completed = true
 	snap.LastTranscript.Review.Blockers = 99
 	snap.CurrentBoard.Items[0].Summary = "mutated"
+	snap.RecentTimeline[0].Summary = "mutated"
 
 	// Original should be unaffected.
 	original := sp.Snapshot()
@@ -107,6 +111,9 @@ func TestStatusProviderSnapshotCopyIsolation(t *testing.T) {
 	}
 	if original.CurrentBoard == nil || len(original.CurrentBoard.Items) != 1 || original.CurrentBoard.Items[0].Summary != "old" {
 		t.Errorf("mutation leaked: CurrentBoard = %+v", original.CurrentBoard)
+	}
+	if len(original.RecentTimeline) != 1 || original.RecentTimeline[0].Summary != "plan summary" {
+		t.Errorf("mutation leaked: RecentTimeline = %+v", original.RecentTimeline)
 	}
 }
 

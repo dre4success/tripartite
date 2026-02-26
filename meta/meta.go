@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func Start(ctx context.Context, cfg Config) error {
 	if cfg.CycleEnabled {
 		fmt.Println("Mode: cycle state machine (experimental)")
 		fmt.Printf("Live updates: %s\n", effectiveCycleLive)
-		fmt.Println("Commands: /status, /board, /live, /approve, /deny, /stop, /history, /help, /quit")
+		fmt.Println("Commands: /status, /board, /timeline, /live, /approve, /deny, /stop, /history, /help, /quit")
 	} else {
 		fmt.Println("Commands: /brainstorm, /delegate, /history, /help, /quit")
 	}
@@ -229,6 +230,27 @@ func Start(ctx context.Context, cfg Config) error {
 				continue
 			}
 			printCycleBoard(statusProvider)
+			continue
+
+		case "timeline":
+			if !cfg.CycleEnabled {
+				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				continue
+			}
+			if !cycleRunning {
+				fmt.Println("No cycle is currently running.")
+				continue
+			}
+			limit := 10
+			if arg != "" {
+				n, err := strconv.Atoi(strings.TrimSpace(arg))
+				if err != nil || n <= 0 {
+					fmt.Println("Usage: /timeline [count]")
+					continue
+				}
+				limit = n
+			}
+			printCycleTimeline(statusProvider, limit)
 			continue
 
 		case "live":
@@ -931,6 +953,7 @@ func printCycleHelp() {
 	fmt.Println("Cycle commands:")
 	fmt.Println("  /status                    Show current cycle state")
 	fmt.Println("  /board                     Show current transcript-backed phase board")
+	fmt.Println("  /timeline [count]          Show recent transcript-backed collaboration events")
 	fmt.Println("  /live [mode]               Set live updates: off|compact|verbose")
 	fmt.Println("  /approve [ticket-id]       Approve pending approval")
 	fmt.Println("  /deny [ticket-id]          Deny pending approval")
@@ -1053,6 +1076,54 @@ func printCycleBoard(sp *cycle.StatusProvider) {
 			item.Agent,
 			item.Kind,
 			truncateDesc(item.Summary, 120),
+		)
+	}
+}
+
+func printCycleTimeline(sp *cycle.StatusProvider, limit int) {
+	if sp == nil {
+		fmt.Println("No cycle status provider.")
+		return
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	snap := sp.Snapshot()
+	if snap == nil {
+		fmt.Println("Cycle is running (no status available yet).")
+		return
+	}
+	if len(snap.RecentTimeline) == 0 {
+		fmt.Println("No recent transcript events yet.")
+		return
+	}
+
+	events := snap.RecentTimeline
+	capN := snap.RecentTimelineCap
+	if capN <= 0 {
+		capN = len(events)
+	}
+	if len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+
+	fmt.Printf("Recent timeline (%d shown):\n", len(events))
+	if limit > capN && len(snap.RecentTimeline) >= capN && capN > 0 {
+		fmt.Printf("  (status snapshot currently retains up to %d recent events; requested %d)\n", capN, limit)
+	}
+	for _, ev := range events {
+		phase := ev.Phase
+		if phase == "" {
+			phase = string(snap.State)
+		}
+		fmt.Printf("  #%d %s#%d [%s][%s][%s] %s\n",
+			ev.ID,
+			phase,
+			ev.Pass,
+			ev.Role,
+			ev.Agent,
+			ev.Kind,
+			truncateDesc(ev.Summary, 120),
 		)
 	}
 }

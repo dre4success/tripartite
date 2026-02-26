@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const statusRecentTimelineCap = 50
+
 // State represents a cycle state machine state.
 type State string
 
@@ -217,6 +219,7 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 	statusPass := cc.passForState(cc.state)
 	tx := cc.transcript.StatusSummary(statusPhase, statusPass)
 	board := cc.transcript.PhaseBoardSummary(statusPhase, statusPass, roles)
+	timeline := cc.transcript.RecentTimeline(statusRecentTimelineCap, roles)
 
 	subtasks := buildSubtaskStatuses(cc)
 	completed := 0
@@ -248,6 +251,8 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 		LastTranscript:    tx,
 		CurrentReview:     tx.Review,
 		CurrentBoard:      board,
+		RecentTimeline:    timeline,
+		RecentTimelineCap: statusRecentTimelineCap,
 	})
 }
 

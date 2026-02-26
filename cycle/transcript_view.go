@@ -39,6 +39,17 @@ type PhaseBoardSummary struct {
 	Items []PhaseBoardItem `json:"items,omitempty"`
 }
 
+// TimelineEvent is a compact transcript-backed event for operator inspection.
+type TimelineEvent struct {
+	ID      int       `json:"id"`
+	Phase   string    `json:"phase,omitempty"`
+	Pass    int       `json:"pass,omitempty"`
+	Role    string    `json:"role,omitempty"`
+	Agent   string    `json:"agent,omitempty"`
+	Kind    EntryKind `json:"kind"`
+	Summary string    `json:"summary"`
+}
+
 // LastNonStateChange returns the most recent transcript entry that is not a state transition.
 func (t *Transcript) LastNonStateChange() *Entry {
 	t.mu.RLock()
@@ -186,6 +197,44 @@ func (t *Transcript) PhaseBoardSummary(phase string, pass int, roles *RoleMap) *
 		out.Items = append(out.Items, it.item)
 	}
 	return out
+}
+
+// RecentTimeline returns the last N non-state-change transcript entries, oldest to newest.
+// This is intended for operator-facing status/inspection views, not persistence.
+func (t *Transcript) RecentTimeline(limit int, roles *RoleMap) []TimelineEvent {
+	if limit <= 0 {
+		return nil
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	events := make([]TimelineEvent, 0, limit)
+	for i := len(t.entries) - 1; i >= 0 && len(events) < limit; i-- {
+		e := t.entries[i]
+		if e.Kind == KindStateChange {
+			continue
+		}
+		agent := e.Agent
+		if agent == "" {
+			agent = "coordinator"
+		}
+		events = append(events, TimelineEvent{
+			ID:      e.ID,
+			Phase:   e.Phase,
+			Pass:    e.Pass,
+			Role:    roleForAgent(agent, roles),
+			Agent:   agent,
+			Kind:    e.Kind,
+			Summary: summarizeTranscriptEntry(e),
+		})
+	}
+
+	// Reverse to chronological order for easier human reading.
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	return events
 }
 
 func summarizeTranscriptEntry(e Entry) string {

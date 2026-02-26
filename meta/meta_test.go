@@ -20,6 +20,8 @@ func TestParseSlashCommand(t *testing.T) {
 		{name: "exit", input: "/exit", wantCmd: "exit", wantArg: ""},
 		{name: "history", input: "/history", wantCmd: "history", wantArg: ""},
 		{name: "board", input: "/board", wantCmd: "board", wantArg: ""},
+		{name: "timeline", input: "/timeline", wantCmd: "timeline", wantArg: ""},
+		{name: "timeline_with_arg", input: "/timeline 5", wantCmd: "timeline", wantArg: "5"},
 		{name: "live_with_arg", input: "/live verbose", wantCmd: "live", wantArg: "verbose"},
 		{name: "live_no_arg", input: "/live", wantCmd: "live", wantArg: ""},
 		{name: "help", input: "/help", wantCmd: "help", wantArg: ""},
