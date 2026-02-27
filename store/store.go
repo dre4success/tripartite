@@ -286,6 +286,13 @@ type MetaSessionTurn struct {
 	Error                 string               `json:"error,omitempty"`                   // delegate/cycle error summary
 }
 
+// MetaSessionState captures resumable meta-session state.
+type MetaSessionState struct {
+	Turns         []MetaSessionTurn `json:"turns,omitempty"`
+	AgentSessions map[string]string `json:"agent_sessions,omitempty"`
+	UpdatedAt     string            `json:"updated_at,omitempty"`
+}
+
 // SaveMetaSessionSummary writes a summary.md for a meta session with mixed engine turns.
 func (s *Store) SaveMetaSessionSummary(meta RunMeta, turns []MetaSessionTurn) error {
 	var b strings.Builder
@@ -325,6 +332,12 @@ func (s *Store) SaveMetaSessionSummary(meta RunMeta, turns []MetaSessionTurn) er
 			if turn.Agent != "" {
 				fmt.Fprintf(&b, "**Agent:** %s\n\n", turn.Agent)
 			}
+			if turn.DecisionAction != "" {
+				fmt.Fprintf(&b, "**Decision Action:** %s\n\n", turn.DecisionAction)
+			}
+			if turn.DecisionActionSummary != "" {
+				fmt.Fprintf(&b, "**Decision Action Result:** %s\n\n", turn.DecisionActionSummary)
+			}
 			if turn.Error != "" {
 				fmt.Fprintf(&b, "**Error:** %s\n\n", turn.Error)
 			}
@@ -359,6 +372,28 @@ func (s *Store) SaveMetaSessionSummary(meta RunMeta, turns []MetaSessionTurn) er
 
 	path := filepath.Join(s.RunDir, "summary.md")
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// SaveMetaSessionState persists resumable meta-session state.
+func (s *Store) SaveMetaSessionState(state MetaSessionState) error {
+	if state.UpdatedAt == "" {
+		state.UpdatedAt = time.Now().Format(time.RFC3339)
+	}
+	return s.writeJSON(filepath.Join(s.RunDir, "meta_session_state.json"), state)
+}
+
+// LoadMetaSessionState loads previously persisted meta-session state.
+func (s *Store) LoadMetaSessionState() (MetaSessionState, error) {
+	var state MetaSessionState
+	path := filepath.Join(s.RunDir, "meta_session_state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return state, fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return state, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return state, nil
 }
 
 func (s *Store) writeJSON(path string, v any) error {

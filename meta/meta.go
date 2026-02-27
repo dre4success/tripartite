@@ -39,9 +39,15 @@ type BrainstormResult struct {
 
 // DelegateResult holds the streaming delegation output.
 type DelegateResult struct {
-	Agent      string
-	EventCount int
-	FinalText  string
+	Agent                 string
+	EventCount            int
+	FinalText             string
+	Worktree              store.DelegateWorkspace
+	RepoRoot              string
+	SessionID             string
+	DecisionAction        string
+	DecisionActionSummary string
+	DecisionActionError   string
 }
 
 // CycleResult holds a summarized outcome from the cycle state machine.
@@ -58,24 +64,43 @@ type CycleResult struct {
 
 // Config holds the configuration for a meta session.
 type Config struct {
-	Adapters     []adapter.Adapter
-	Approval     adapter.ApprovalLevel
-	Agents       []agent.Agent
-	Sandbox      string
-	Worktree     bool
-	Timeout      time.Duration
-	Store        *store.Store
-	Logger       *logger.Logger
-	DefaultAgent string
-	CycleEnabled bool
-	CycleLive    LiveCycleVerbosity
-	ResumeCycle  bool
-	ResumeTurn   int
+	Adapters      []adapter.Adapter
+	Approval      adapter.ApprovalLevel
+	Agents        []agent.Agent
+	Sandbox       string
+	Worktree      bool
+	Timeout       time.Duration
+	Store         *store.Store
+	Logger        *logger.Logger
+	DefaultAgent  string
+	CycleEnabled  bool
+	CycleLive     LiveCycleVerbosity
+	ResumeCycle   bool
+	ResumeTurn    int
+	InitialTurns  []Turn
+	AgentSessions map[string]string
 }
+
+type pendingDelegateDecision struct {
+	TurnIndex int
+	RepoRoot  string
+	Branch    string
+}
+
+const (
+	delegateDecisionActionApplyFF = "apply_worktree_branch_ff"
+	delegateDecisionActionKeep    = "keep_proposal"
+)
 
 // Start launches the interactive meta session REPL.
 func Start(ctx context.Context, cfg Config) error {
-	var turns []Turn
+	turns := append([]Turn(nil), cfg.InitialTurns...)
+	agentSessions := make(map[string]string, len(cfg.AgentSessions))
+	for k, v := range cfg.AgentSessions {
+		if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+			agentSessions[k] = strings.TrimSpace(v)
+		}
+	}
 
 	adapterNames := make([]string, len(cfg.Adapters))
 	for i, a := range cfg.Adapters {
@@ -94,11 +119,11 @@ func Start(ctx context.Context, cfg Config) error {
 	fmt.Printf("Adapters: %s\n", strings.Join(adapterNames, ", "))
 	fmt.Printf("Agents: %s\n", strings.Join(agentNames, ", "))
 	if cfg.CycleEnabled {
-		fmt.Println("Mode: cycle state machine (experimental)")
+		fmt.Println("Mode: cycle state machine (default runtime)")
 		fmt.Printf("Live updates: %s\n", effectiveCycleLive)
 		fmt.Println("Commands: /status, /board, /timeline, /live, /resume, /clarify, /approve, /deny, /stop, /history, /help, /quit")
 	} else {
-		fmt.Println("Commands: /brainstorm, /delegate, /history, /help, /quit")
+		fmt.Println("Commands: /status, /approve, /deny, /brainstorm, /delegate, /history, /help, /quit")
 	}
 	fmt.Println()
 
@@ -106,11 +131,12 @@ func Start(ctx context.Context, cfg Config) error {
 	var broker *cycle.ApprovalBroker
 	var clarifier *cycle.ClarificationBroker
 	var statusProvider *cycle.StatusProvider
+	broker = cycle.NewApprovalBroker()
 	if cfg.CycleEnabled {
-		broker = cycle.NewApprovalBroker()
 		clarifier = cycle.NewClarificationBroker()
 		statusProvider = cycle.NewStatusProvider()
 	}
+	delegateDecisions := make(map[string]pendingDelegateDecision)
 
 	// Channels for async cycle results.
 	type cycleResult struct {
@@ -192,6 +218,7 @@ func Start(ctx context.Context, cfg Config) error {
 				},
 				Cycle: summary,
 			})
+			checkpointMetaSessionState(cfg, turns, agentSessions)
 		}
 		cyclePrompt = ""
 		cycleCancel = nil
@@ -199,10 +226,19 @@ func Start(ctx context.Context, cfg Config) error {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
+		pTotal, pPerm, pDec := approvalCounts(broker)
+		pClar := 0
+		if clarifier != nil {
+			pClar = len(clarifier.Pending())
+		}
 		if cycleRunning {
-			fmt.Print("[cycle] > ")
+			fmt.Printf("[cycle p:%d (perm:%d dec:%d) c:%d] > ", pTotal, pPerm, pDec, pClar)
 		} else {
-			fmt.Print("> ")
+			if pTotal > 0 || pClar > 0 {
+				fmt.Printf("[meta p:%d (perm:%d dec:%d) c:%d] > ", pTotal, pPerm, pDec, pClar)
+			} else {
+				fmt.Print("> ")
+			}
 		}
 		if !scanner.Scan() {
 			break
@@ -230,7 +266,7 @@ func Start(ctx context.Context, cfg Config) error {
 				cycleCancel()
 			}
 			fmt.Println("Ending session.")
-			return saveMetaSession(cfg, adapterNames, agentNames, turns)
+			return saveMetaSession(cfg, adapterNames, agentNames, turns, agentSessions)
 
 		case "history":
 			fmt.Printf("Session has %d turn(s).\n", len(turns))
@@ -238,6 +274,9 @@ func Start(ctx context.Context, cfg Config) error {
 				engine := "brainstorm"
 				if t.Delegate != nil {
 					engine = "delegate → " + t.Delegate.Agent
+					if t.Delegate.DecisionAction != "" {
+						engine += " [" + t.Delegate.DecisionAction + "]"
+					}
 				} else if t.Cycle != nil {
 					engine = "cycle"
 				}
@@ -254,15 +293,11 @@ func Start(ctx context.Context, cfg Config) error {
 			continue
 
 		case "status":
-			if !cfg.CycleEnabled {
-				printCycleModeDisabledHint()
+			if cfg.CycleEnabled && cycleRunning {
+				printCycleStatus(statusProvider, broker, clarifier)
 				continue
 			}
-			if !cycleRunning {
-				fmt.Println("No cycle is currently running.")
-				continue
-			}
-			printCycleStatus(statusProvider, broker, clarifier)
+			printControlPlaneStatus(broker, clarifier, cycleRunning)
 			continue
 
 		case "board":
@@ -391,8 +426,8 @@ func Start(ctx context.Context, cfg Config) error {
 			continue
 
 		case "approve":
-			if !cfg.CycleEnabled || broker == nil {
-				printCycleModeDisabledHint()
+			if broker == nil {
+				fmt.Println("Approval broker unavailable.")
 				continue
 			}
 			pending := broker.Pending()
@@ -409,12 +444,25 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			} else {
 				fmt.Printf("Approved: %s\n", ticketID)
+				if d, ok := delegateDecisions[ticketID]; ok {
+					action, summary, actionErr := applyDelegateDecision(ctx, true, d)
+					turns[d.TurnIndex].Delegate.DecisionAction = action
+					turns[d.TurnIndex].Delegate.DecisionActionSummary = summary
+					turns[d.TurnIndex].Delegate.DecisionActionError = actionErr
+					delete(delegateDecisions, ticketID)
+					if actionErr != "" {
+						fmt.Fprintf(os.Stderr, "[control-plane] delegate decision action failed: %s\n", actionErr)
+					} else if summary != "" {
+						fmt.Printf("[control-plane] %s\n", summary)
+					}
+					checkpointMetaSessionState(cfg, turns, agentSessions)
+				}
 			}
 			continue
 
 		case "deny":
-			if !cfg.CycleEnabled || broker == nil {
-				printCycleModeDisabledHint()
+			if broker == nil {
+				fmt.Println("Approval broker unavailable.")
 				continue
 			}
 			pending := broker.Pending()
@@ -431,6 +479,19 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			} else {
 				fmt.Printf("Denied: %s\n", ticketID)
+				if d, ok := delegateDecisions[ticketID]; ok {
+					action, summary, actionErr := applyDelegateDecision(ctx, false, d)
+					turns[d.TurnIndex].Delegate.DecisionAction = action
+					turns[d.TurnIndex].Delegate.DecisionActionSummary = summary
+					turns[d.TurnIndex].Delegate.DecisionActionError = actionErr
+					delete(delegateDecisions, ticketID)
+					if actionErr != "" {
+						fmt.Fprintf(os.Stderr, "[control-plane] delegate decision action failed: %s\n", actionErr)
+					} else if summary != "" {
+						fmt.Printf("[control-plane] %s\n", summary)
+					}
+					checkpointMetaSessionState(cfg, turns, agentSessions)
+				}
 			}
 			continue
 
@@ -458,12 +519,15 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Println("Usage: /brainstorm <prompt>")
 				continue
 			}
-			turn, err := runOnceForced(ctx, cfg, arg, turns, len(turns)+1, router.IntentBrainstorm, "", false)
+			runCfg := cfg
+			runCfg.AgentSessions = agentSessions
+			turn, err := runOnceForced(ctx, runCfg, arg, turns, len(turns)+1, router.IntentBrainstorm, "", false)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				continue
 			}
 			turns = append(turns, *turn)
+			checkpointMetaSessionState(cfg, turns, agentSessions)
 			continue
 
 		case "delegate":
@@ -480,12 +544,19 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Println("Usage: /delegate [agent] <prompt>")
 				continue
 			}
-			turn, err := runOnceForced(ctx, cfg, prompt, turns, len(turns)+1, router.IntentDelegate, agentName, explicitAgent)
+			runCfg := cfg
+			runCfg.AgentSessions = agentSessions
+			turn, err := runOnceForced(ctx, runCfg, prompt, turns, len(turns)+1, router.IntentDelegate, agentName, explicitAgent)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				continue
 			}
 			turns = append(turns, *turn)
+			updateAgentSession(agentSessions, turn)
+			if ticketID, pd, ok := queueDelegateDecisionTicket(broker, turns[len(turns)-1], len(turns)-1); ok {
+				delegateDecisions[ticketID] = pd
+			}
+			checkpointMetaSessionState(cfg, turns, agentSessions)
 			continue
 
 		default:
@@ -513,13 +584,22 @@ func Start(ctx context.Context, cfg Config) error {
 			}
 
 			// Legacy path — route automatically.
-			turn, err := RunOnce(ctx, cfg, input, turns, len(turns)+1)
+			runCfg := cfg
+			runCfg.AgentSessions = agentSessions
+			turn, err := RunOnce(ctx, runCfg, input, turns, len(turns)+1)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				fmt.Println("(You can try another prompt or /quit)")
 				continue
 			}
 			turns = append(turns, *turn)
+			updateAgentSession(agentSessions, turn)
+			if turn.Delegate != nil {
+				if ticketID, pd, ok := queueDelegateDecisionTicket(broker, turns[len(turns)-1], len(turns)-1); ok {
+					delegateDecisions[ticketID] = pd
+				}
+			}
+			checkpointMetaSessionState(cfg, turns, agentSessions)
 		}
 	}
 
@@ -533,7 +613,7 @@ func Start(ctx context.Context, cfg Config) error {
 	}
 
 	fmt.Println("\nEnd of input. Ending session.")
-	return saveMetaSession(cfg, adapterNames, agentNames, turns)
+	return saveMetaSession(cfg, adapterNames, agentNames, turns, agentSessions)
 }
 
 // RunOnceCycle processes a single prompt through the cycle state machine.
@@ -715,6 +795,58 @@ func resolveClarificationTicket(ticketID string, pending []*cycle.PendingClarifi
 	}
 }
 
+func updateAgentSession(agentSessions map[string]string, turn *Turn) {
+	if turn == nil || turn.Delegate == nil || agentSessions == nil {
+		return
+	}
+	if sid := strings.TrimSpace(turn.Delegate.SessionID); sid != "" {
+		agentSessions[turn.Delegate.Agent] = sid
+	}
+}
+
+func queueDelegateDecisionTicket(broker *cycle.ApprovalBroker, turn Turn, turnIndex int) (string, pendingDelegateDecision, bool) {
+	if broker == nil || turn.Delegate == nil {
+		return "", pendingDelegateDecision{}, false
+	}
+	d := turn.Delegate
+	if !d.Worktree.Enabled || strings.TrimSpace(d.Worktree.Branch) == "" || len(d.Worktree.Commits) == 0 {
+		return "", pendingDelegateDecision{}, false
+	}
+	repoRoot := strings.TrimSpace(d.RepoRoot)
+	if repoRoot == "" {
+		return "", pendingDelegateDecision{}, false
+	}
+
+	reason := fmt.Sprintf(
+		"Delegate decision required: /approve => %s (%q), /deny => %s",
+		delegateDecisionActionApplyFF,
+		d.Worktree.Branch,
+		delegateDecisionActionKeep,
+	)
+	pa := broker.Request(reason, cycle.ApprovalScopeDecisionGate, cycle.StateDone)
+	fmt.Printf("[control-plane] Decision ticket created: %s\n", pa.TicketID)
+	fmt.Printf("  Reason: %s\n", pa.Reason)
+	fmt.Printf("  Use /approve %s or /deny %s\n", pa.TicketID, pa.TicketID)
+	return pa.TicketID, pendingDelegateDecision{
+		TurnIndex: turnIndex,
+		RepoRoot:  repoRoot,
+		Branch:    d.Worktree.Branch,
+	}, true
+}
+
+func applyDelegateDecision(_ context.Context, approved bool, d pendingDelegateDecision) (action, summary, errMsg string) {
+	if !approved {
+		return delegateDecisionActionKeep, "kept delegate result as proposal (no apply)", ""
+	}
+	action = delegateDecisionActionApplyFF
+	mergeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := workspace.MergeBranchFF(mergeCtx, d.RepoRoot, d.Branch); err != nil {
+		return action, "", err.Error()
+	}
+	return action, fmt.Sprintf("applied delegate worktree branch %q via fast-forward merge", d.Branch), ""
+}
+
 // parseDelegateArg parses "/delegate [agent] <prompt>".
 // If the first word is any known agent name (installed or not), it is treated as an explicit agent target.
 // Otherwise the default agent is used and the full arg is treated as the prompt.
@@ -769,6 +901,7 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 	}
 
 	resolvedModel := agent.ResolveModel(a.Name(), a.DefaultModel())
+	sessionID := strings.TrimSpace(cfg.AgentSessions[a.Name()])
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -818,11 +951,13 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 
 	var finalText strings.Builder
 	eventCount := 0
+	latestSessionID := sessionID
 
 	runErr := stream.Run(ctx, a, prompt, agent.StreamOpts{
-		Model:   resolvedModel,
-		Sandbox: cfg.Sandbox,
-		Cwd:     runCwd,
+		Model:     resolvedModel,
+		Sandbox:   cfg.Sandbox,
+		Cwd:       runCwd,
+		SessionID: sessionID,
 	}, stream.Callbacks{
 		OnEvent: func(ev agent.Event) {
 			eventCount++
@@ -835,6 +970,11 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 			if ev.Type == agent.EventText {
 				if s, ok := ev.Data.(string); ok {
 					finalText.WriteString(s)
+				}
+			}
+			if ev.Type == agent.EventSession {
+				if sid, ok := ev.Data.(string); ok && strings.TrimSpace(sid) != "" {
+					latestSessionID = strings.TrimSpace(sid)
 				}
 			}
 		},
@@ -889,6 +1029,9 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 		Agent:      agentName,
 		EventCount: eventCount,
 		FinalText:  finalText.String(),
+		Worktree:   wsInfo,
+		RepoRoot:   cwd,
+		SessionID:  latestSessionID,
 	}, nil
 }
 
@@ -1030,37 +1173,13 @@ func toOrchestratorHistory(turns []Turn) []orchestrator.Turn {
 	return out
 }
 
-func saveMetaSession(cfg Config, adapterNames, agentNames []string, turns []Turn) error {
+func saveMetaSession(cfg Config, adapterNames, agentNames []string, turns []Turn, agentSessions map[string]string) error {
 	if len(turns) == 0 {
 		return nil
 	}
+	checkpointMetaSessionState(cfg, turns, agentSessions)
 
-	storeTurns := make([]store.MetaSessionTurn, len(turns))
-	for i, t := range turns {
-		st := store.MetaSessionTurn{
-			Prompt: t.Prompt,
-		}
-		if t.Brainstorm != nil {
-			st.Engine = "brainstorm"
-			st.Responses = t.Brainstorm.Rounds
-		} else if t.Delegate != nil {
-			st.Engine = "delegate"
-			st.Agent = t.Delegate.Agent
-			st.FinalText = t.Delegate.FinalText
-		} else if t.Cycle != nil {
-			st.Engine = "cycle"
-			st.CycleID = t.Cycle.CycleID
-			st.CycleState = t.Cycle.FinalState
-			st.FinalText = t.Cycle.Recommendation
-			st.DecisionAction = t.Cycle.DecisionAction
-			st.DecisionActionSummary = t.Cycle.DecisionActionSummary
-			st.Error = t.Cycle.Error
-			if st.Error == "" {
-				st.Error = t.Cycle.DecisionActionError
-			}
-		}
-		storeTurns[i] = st
-	}
+	storeTurns := toStoreMetaSessionTurns(turns)
 
 	allModels := append(adapterNames, agentNames...)
 	meta := store.RunMeta{
@@ -1077,6 +1196,115 @@ func saveMetaSession(cfg Config, adapterNames, agentNames []string, turns []Turn
 
 	fmt.Printf("Session artifacts saved to: %s\n", cfg.Store.RunDir)
 	return nil
+}
+
+func toStoreMetaSessionTurns(turns []Turn) []store.MetaSessionTurn {
+	storeTurns := make([]store.MetaSessionTurn, len(turns))
+	for i, t := range turns {
+		st := store.MetaSessionTurn{
+			Prompt: t.Prompt,
+		}
+		if t.Brainstorm != nil {
+			st.Engine = "brainstorm"
+			st.Responses = t.Brainstorm.Rounds
+		} else if t.Delegate != nil {
+			st.Engine = "delegate"
+			st.Agent = t.Delegate.Agent
+			st.FinalText = t.Delegate.FinalText
+			st.DecisionAction = t.Delegate.DecisionAction
+			st.DecisionActionSummary = t.Delegate.DecisionActionSummary
+			st.Error = t.Delegate.DecisionActionError
+		} else if t.Cycle != nil {
+			st.Engine = "cycle"
+			st.CycleID = t.Cycle.CycleID
+			st.CycleState = t.Cycle.FinalState
+			st.FinalText = t.Cycle.Recommendation
+			st.DecisionAction = t.Cycle.DecisionAction
+			st.DecisionActionSummary = t.Cycle.DecisionActionSummary
+			st.Error = t.Cycle.Error
+			if st.Error == "" {
+				st.Error = t.Cycle.DecisionActionError
+			}
+		}
+		storeTurns[i] = st
+	}
+	return storeTurns
+}
+
+func fromStoreMetaSessionTurns(in []store.MetaSessionTurn) []Turn {
+	out := make([]Turn, 0, len(in))
+	for _, st := range in {
+		t := Turn{
+			Prompt: st.Prompt,
+		}
+		switch st.Engine {
+		case "brainstorm":
+			t.Brainstorm = &BrainstormResult{Rounds: st.Responses}
+			t.Route = router.Result{Intent: router.IntentBrainstorm, Reason: "restored from session state"}
+		case "delegate":
+			t.Delegate = &DelegateResult{
+				Agent:                 st.Agent,
+				FinalText:             st.FinalText,
+				DecisionAction:        st.DecisionAction,
+				DecisionActionSummary: st.DecisionActionSummary,
+				DecisionActionError:   st.Error,
+			}
+			t.Route = router.Result{Intent: router.IntentDelegate, Agent: st.Agent, Reason: "restored from session state"}
+		case "cycle":
+			t.Cycle = &CycleResult{
+				CycleID:               st.CycleID,
+				FinalState:            st.CycleState,
+				Recommendation:        st.FinalText,
+				DecisionAction:        st.DecisionAction,
+				DecisionActionSummary: st.DecisionActionSummary,
+				Error:                 st.Error,
+			}
+			t.Route = router.Result{Reason: "restored from session state"}
+		default:
+			t.Route = router.Result{Reason: "restored from session state"}
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// RestoreSessionState converts persisted store state into in-memory meta turns
+// and per-agent session IDs for resume workflows.
+func RestoreSessionState(state store.MetaSessionState) ([]Turn, map[string]string) {
+	turns := fromStoreMetaSessionTurns(state.Turns)
+	agentSessions := make(map[string]string, len(state.AgentSessions))
+	for k, v := range state.AgentSessions {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		agentSessions[k] = v
+	}
+	return turns, agentSessions
+}
+
+func checkpointMetaSessionState(cfg Config, turns []Turn, agentSessions map[string]string) {
+	if cfg.Store == nil {
+		return
+	}
+	state := store.MetaSessionState{
+		Turns: toStoreMetaSessionTurns(turns),
+	}
+	if len(agentSessions) > 0 {
+		state.AgentSessions = make(map[string]string, len(agentSessions))
+		for k, v := range agentSessions {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k == "" || v == "" {
+				continue
+			}
+			state.AgentSessions[k] = v
+		}
+	}
+	if err := cfg.Store.SaveMetaSessionState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to checkpoint meta session state: %v\n", err)
+	}
 }
 
 func handleCycleResult(result *cycle.Result, err error) *CycleResult {
@@ -1123,6 +1351,9 @@ func handleCycleResult(result *cycle.Result, err error) *CycleResult {
 
 func printHelp() {
 	fmt.Println("Meta session commands:")
+	fmt.Println("  /status                    Show control-plane pending tickets")
+	fmt.Println("  /approve [ticket-id]       Approve pending ticket")
+	fmt.Println("  /deny [ticket-id]          Deny pending ticket")
 	fmt.Println("  /brainstorm <prompt>       Force multi-agent brainstorm")
 	fmt.Println("  /delegate [agent] <prompt> Force single-agent delegate")
 	fmt.Println("  /history                   Show turn summaries")
@@ -1153,6 +1384,35 @@ func printCycleHelp() {
 	fmt.Println("  /deny [ticket-id]          Deny pending approval (auto-selects only when exactly one is pending)")
 	fmt.Println("  /stop                      Cancel running cycle")
 	fmt.Println()
+}
+
+func printControlPlaneStatus(broker *cycle.ApprovalBroker, clarifier *cycle.ClarificationBroker, cycleRunning bool) {
+	separator := strings.Repeat("-", 50)
+	fmt.Println(separator)
+	if cycleRunning {
+		fmt.Println("  Cycle is running.")
+	} else {
+		fmt.Println("  No active cycle.")
+	}
+	pendingApprovals := 0
+	if broker != nil {
+		pendingApprovals = len(broker.Pending())
+	}
+	pendingClarifications := 0
+	if clarifier != nil {
+		pendingClarifications = len(clarifier.Pending())
+	}
+	fmt.Printf("  Pending control-plane tickets: approvals=%d clarifications=%d\n", pendingApprovals, pendingClarifications)
+	if broker != nil {
+		printPendingApprovals(broker)
+	}
+	if clarifier != nil {
+		printPendingClarifications(clarifier)
+	}
+	if pendingApprovals == 0 && pendingClarifications == 0 {
+		fmt.Println("  No pending operator actions.")
+	}
+	fmt.Println(separator)
 }
 
 func truncate(s string, max int) string {
@@ -1191,7 +1451,13 @@ func printCycleStatus(sp *cycle.StatusProvider, broker *cycle.ApprovalBroker, cl
 	fmt.Printf("  Cycle: %s\n", snap.CycleID)
 	fmt.Printf("  State: %s (phase: %s)\n", snap.State, snap.Phase)
 	fmt.Printf("  Elapsed: %.1fs\n", snap.Elapsed.Seconds())
-	fmt.Printf("  Pending: approvals=%d clarifications=%d\n", snap.PendingApprovals, snap.PendingClarifications)
+	fmt.Printf(
+		"  Pending: approvals=%d (permissions=%d decisions=%d) clarifications=%d\n",
+		snap.PendingApprovals,
+		snap.PendingPermissionApprovals,
+		snap.PendingDecisionApprovals,
+		snap.PendingClarifications,
+	)
 
 	if snap.TaskType != "" {
 		fmt.Printf("  Task type: %s\n", snap.TaskType)
@@ -1338,10 +1604,29 @@ func printPendingApprovals(broker *cycle.ApprovalBroker) {
 	if len(pending) == 0 {
 		return
 	}
-	fmt.Println("  Pending approvals:")
+	var permission []*cycle.PendingApproval
+	var decision []*cycle.PendingApproval
 	for _, pa := range pending {
-		fmt.Printf("    [%s] %s (scope: %s)\n", pa.TicketID, pa.Reason, pa.Scope)
-		fmt.Printf("    Use /approve %s or /deny %s\n", pa.TicketID, pa.TicketID)
+		switch cycle.NormalizeApprovalKind(pa.Kind, pa.Scope) {
+		case cycle.ApprovalKindDecision:
+			decision = append(decision, pa)
+		default:
+			permission = append(permission, pa)
+		}
+	}
+	if len(permission) > 0 {
+		fmt.Println("  Pending permission approvals:")
+		for _, pa := range permission {
+			fmt.Printf("    [%s] %s (scope: %s)\n", pa.TicketID, pa.Reason, pa.Scope)
+			fmt.Printf("    Use /approve %s or /deny %s\n", pa.TicketID, pa.TicketID)
+		}
+	}
+	if len(decision) > 0 {
+		fmt.Println("  Pending decision tickets:")
+		for _, pa := range decision {
+			fmt.Printf("    [%s] %s\n", pa.TicketID, pa.Reason)
+			fmt.Printf("    Use /approve %s or /deny %s\n", pa.TicketID, pa.TicketID)
+		}
 	}
 }
 
@@ -1355,4 +1640,21 @@ func printPendingClarifications(clarifier *cycle.ClarificationBroker) {
 		fmt.Printf("    [%s] %s\n", pc.TicketID, pc.Question)
 		fmt.Printf("    Use /clarify %s <answer>\n", pc.TicketID)
 	}
+}
+
+func approvalCounts(broker *cycle.ApprovalBroker) (total int, permission int, decision int) {
+	if broker == nil {
+		return 0, 0, 0
+	}
+	pending := broker.Pending()
+	total = len(pending)
+	for _, pa := range pending {
+		switch cycle.NormalizeApprovalKind(pa.Kind, pa.Scope) {
+		case cycle.ApprovalKindDecision:
+			decision++
+		default:
+			permission++
+		}
+	}
+	return total, permission, decision
 }

@@ -1,13 +1,18 @@
 package meta
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dre4success/tripartite/adapter"
 	"github.com/dre4success/tripartite/cycle"
 	"github.com/dre4success/tripartite/orchestrator"
 	"github.com/dre4success/tripartite/router"
+	"github.com/dre4success/tripartite/store"
 )
 
 func TestParseSlashCommand(t *testing.T) {
@@ -426,6 +431,177 @@ func TestToOrchestratorHistory(t *testing.T) {
 		got := toOrchestratorHistory(nil)
 		if len(got) != 0 {
 			t.Errorf("expected 0 turns, got %d", len(got))
+		}
+	})
+}
+
+func TestStoreMetaSessionTurnRoundTrip(t *testing.T) {
+	in := []Turn{
+		{
+			Prompt: "brainstorm prompt",
+			Brainstorm: &BrainstormResult{
+				Rounds: [][]adapter.Response{
+					{{Model: "claude", Content: "a"}},
+				},
+			},
+		},
+		{
+			Prompt: "delegate prompt",
+			Delegate: &DelegateResult{
+				Agent:                 "claude",
+				FinalText:             "done",
+				DecisionAction:        delegateDecisionActionKeep,
+				DecisionActionSummary: "kept",
+				DecisionActionError:   "",
+			},
+		},
+	}
+	storeTurns := toStoreMetaSessionTurns(in)
+	out := fromStoreMetaSessionTurns(storeTurns)
+	if len(out) != len(in) {
+		t.Fatalf("turns len = %d, want %d", len(out), len(in))
+	}
+	if out[0].Brainstorm == nil || len(out[0].Brainstorm.Rounds) != 1 {
+		t.Fatal("brainstorm turn did not round-trip")
+	}
+	if out[1].Delegate == nil || out[1].Delegate.DecisionAction != delegateDecisionActionKeep {
+		t.Fatal("delegate decision did not round-trip")
+	}
+}
+
+func TestCheckpointMetaSessionState(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "tripartite-meta-state-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	s, err := store.New(tempDir)
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+
+	cfg := Config{
+		Store:   s,
+		Timeout: time.Minute,
+	}
+	turns := []Turn{{
+		Prompt: "delegate",
+		Delegate: &DelegateResult{
+			Agent:     "codex",
+			FinalText: "ok",
+		},
+	}}
+	sessions := map[string]string{"codex": "thread-1"}
+	checkpointMetaSessionState(cfg, turns, sessions)
+
+	path := filepath.Join(s.RunDir, "meta_session_state.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected %s: %v", path, err)
+	}
+	state, err := s.LoadMetaSessionState()
+	if err != nil {
+		t.Fatalf("LoadMetaSessionState: %v", err)
+	}
+	if len(state.Turns) != 1 {
+		t.Fatalf("state turns = %d, want 1", len(state.Turns))
+	}
+	if got := state.AgentSessions["codex"]; got != "thread-1" {
+		t.Fatalf("agent session codex = %q, want %q", got, "thread-1")
+	}
+}
+
+func TestUpdateAgentSession(t *testing.T) {
+	sessions := map[string]string{}
+	updateAgentSession(sessions, &Turn{
+		Delegate: &DelegateResult{
+			Agent:     "codex",
+			SessionID: "thread-123",
+		},
+	})
+	if got := sessions["codex"]; got != "thread-123" {
+		t.Fatalf("session codex = %q, want %q", got, "thread-123")
+	}
+}
+
+func TestQueueDelegateDecisionTicket(t *testing.T) {
+	broker := cycle.NewApprovalBroker()
+	turn := Turn{
+		Delegate: &DelegateResult{
+			Agent:    "claude",
+			RepoRoot: "/tmp/repo",
+			Worktree: store.DelegateWorkspace{
+				Enabled: true,
+				Branch:  "tripartite/test/claude",
+				Commits: []store.DelegateCommit{
+					{SHA: "abc"},
+				},
+			},
+		},
+	}
+	ticketID, pd, ok := queueDelegateDecisionTicket(broker, turn, 2)
+	if !ok {
+		t.Fatal("expected decision ticket")
+	}
+	if ticketID == "" {
+		t.Fatal("ticket id should not be empty")
+	}
+	if pd.TurnIndex != 2 {
+		t.Fatalf("turn index = %d, want 2", pd.TurnIndex)
+	}
+	if pd.Branch != "tripartite/test/claude" {
+		t.Fatalf("branch = %q, want %q", pd.Branch, "tripartite/test/claude")
+	}
+	pending := broker.Pending()
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	if pending[0].Kind != cycle.ApprovalKindDecision {
+		t.Fatalf("ticket kind = %q, want %q", pending[0].Kind, cycle.ApprovalKindDecision)
+	}
+}
+
+func TestQueueDelegateDecisionTicketNoCommits(t *testing.T) {
+	broker := cycle.NewApprovalBroker()
+	turn := Turn{
+		Delegate: &DelegateResult{
+			RepoRoot: "/tmp/repo",
+			Worktree: store.DelegateWorkspace{
+				Enabled: true,
+				Branch:  "tripartite/test/claude",
+			},
+		},
+	}
+	ticketID, _, ok := queueDelegateDecisionTicket(broker, turn, 1)
+	if ok || ticketID != "" {
+		t.Fatalf("expected no ticket, got ok=%v ticket=%q", ok, ticketID)
+	}
+}
+
+func TestApplyDelegateDecision(t *testing.T) {
+	t.Run("deny keeps proposal", func(t *testing.T) {
+		action, summary, errMsg := applyDelegateDecision(context.TODO(), false, pendingDelegateDecision{})
+		if action != delegateDecisionActionKeep {
+			t.Fatalf("action = %q, want %q", action, delegateDecisionActionKeep)
+		}
+		if summary == "" {
+			t.Fatal("expected summary for deny action")
+		}
+		if errMsg != "" {
+			t.Fatalf("errMsg = %q, want empty", errMsg)
+		}
+	})
+
+	t.Run("approve merge failure reports error", func(t *testing.T) {
+		action, _, errMsg := applyDelegateDecision(context.TODO(), true, pendingDelegateDecision{
+			RepoRoot: "/tmp/not-a-repo",
+			Branch:   "tripartite/test/claude",
+		})
+		if action != delegateDecisionActionApplyFF {
+			t.Fatalf("action = %q, want %q", action, delegateDecisionActionApplyFF)
+		}
+		if errMsg == "" {
+			t.Fatal("expected merge error")
 		}
 	})
 }

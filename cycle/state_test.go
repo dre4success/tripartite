@@ -355,7 +355,7 @@ func TestDecisionApprovalDenyDoesNotAbort(t *testing.T) {
 	cc := newCycleContext(Config{})
 	cc.decision = &DecisionPayload{}
 	cc.resumeState = StateDone
-	cc.lastApproval = &PendingApproval{Approved: false, Scope: decisionGateApprovalScope}
+	cc.lastApproval = &PendingApproval{Approved: false, Scope: ApprovalScopeDecisionGate}
 
 	if cc.approvalDenied() {
 		t.Fatal("approvalDenied should be false for denied decision-gate approval")

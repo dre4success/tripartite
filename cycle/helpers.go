@@ -19,7 +19,6 @@ const (
 	decisionActionApplyWorktreeFF = "apply_worktree_branch_ff"
 	decisionActionAcceptResult    = "accept_result"
 	decisionActionKeepProposal    = "keep_proposal"
-	decisionGateApprovalScope     = "decision_gate"
 )
 
 type decisionActionPlan struct {
@@ -301,7 +300,7 @@ func (cc *cycleContext) decisionApprovalRequest() (reason, scope string) {
 		denyAction = decisionActionKeepProposal
 	}
 
-	scope = decisionGateApprovalScope
+	scope = ApprovalScopeDecisionGate
 	return fmt.Sprintf("Decision required: /approve => %s, /deny => %s", approveAction, denyAction), scope
 }
 

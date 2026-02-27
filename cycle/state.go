@@ -144,8 +144,19 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 	}
 
 	pendingApprovals := 0
+	pendingPermissionApprovals := 0
+	pendingDecisionApprovals := 0
 	if cfg.Broker != nil {
-		pendingApprovals = len(cfg.Broker.Pending())
+		pending := cfg.Broker.Pending()
+		pendingApprovals = len(pending)
+		for _, pa := range pending {
+			switch NormalizeApprovalKind(pa.Kind, pa.Scope) {
+			case ApprovalKindDecision:
+				pendingDecisionApprovals++
+			default:
+				pendingPermissionApprovals++
+			}
+		}
 	}
 	pendingClarifications := 0
 	if cfg.Clarifier != nil {
@@ -183,30 +194,32 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 	}
 
 	cfg.Status.Update(CycleStatus{
-		CycleID:               cc.cycleID,
-		State:                 cc.state,
-		Phase:                 statusPhase,
-		Pass:                  statusPass,
-		StartedAt:             start,
-		Elapsed:               time.Since(start),
-		CurrentSubtask:        cc.currentSubtask,
-		TotalSubtasks:         len(subtasks),
-		CompletedSubtasks:     completed,
-		Subtasks:              subtasks,
-		RevisionCount:         cc.revisionCount,
-		MaxRevisions:          maxRevisions,
-		RetryCount:            cc.retryCount,
-		PendingApprovals:      pendingApprovals,
-		PendingClarifications: pendingClarifications,
-		LastError:             lastErr,
-		TaskType:              taskType,
-		Intent:                intent,
-		TranscriptLen:         cc.transcript.Len(),
-		LastTranscript:        tx,
-		CurrentReview:         tx.Review,
-		CurrentBoard:          board,
-		RecentTimeline:        timeline,
-		RecentTimelineCap:     statusRecentTimelineCap,
+		CycleID:                    cc.cycleID,
+		State:                      cc.state,
+		Phase:                      statusPhase,
+		Pass:                       statusPass,
+		StartedAt:                  start,
+		Elapsed:                    time.Since(start),
+		CurrentSubtask:             cc.currentSubtask,
+		TotalSubtasks:              len(subtasks),
+		CompletedSubtasks:          completed,
+		Subtasks:                   subtasks,
+		RevisionCount:              cc.revisionCount,
+		MaxRevisions:               maxRevisions,
+		RetryCount:                 cc.retryCount,
+		PendingApprovals:           pendingApprovals,
+		PendingPermissionApprovals: pendingPermissionApprovals,
+		PendingDecisionApprovals:   pendingDecisionApprovals,
+		PendingClarifications:      pendingClarifications,
+		LastError:                  lastErr,
+		TaskType:                   taskType,
+		Intent:                     intent,
+		TranscriptLen:              cc.transcript.Len(),
+		LastTranscript:             tx,
+		CurrentReview:              tx.Review,
+		CurrentBoard:               board,
+		RecentTimeline:             timeline,
+		RecentTimelineCap:          statusRecentTimelineCap,
 	})
 }
 

@@ -88,6 +88,12 @@ func TestCodexParseEvent(t *testing.T) {
 		wantErr  bool
 	}{
 		{
+			name:     "session started",
+			line:     `{"type":"thread.started","thread_id":"th-123"}`,
+			wantType: EventSession,
+			wantData: "th-123",
+		},
+		{
 			name:     "text chunk",
 			line:     `{"type":"item.completed","item":{"type":"agent_message","content":"hello"}}`,
 			wantType: EventText,
@@ -159,6 +165,12 @@ func TestGeminiParseEvent(t *testing.T) {
 		wantData string
 		wantErr  bool
 	}{
+		{
+			name:     "session started",
+			line:     `{"type":"session.started","session_id":"gs-123"}`,
+			wantType: EventSession,
+			wantData: "gs-123",
+		},
 		{
 			name:     "message",
 			line:     `{"type":"message","content":"hello Gemini"}`,

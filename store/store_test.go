@@ -177,3 +177,80 @@ func TestSaveMetaSessionSummaryIncludesCycleDecisionAction(t *testing.T) {
 		t.Fatalf("summary missing decision action result line:\n%s", got)
 	}
 }
+
+func TestSaveMetaSessionSummaryIncludesDelegateDecisionAction(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "tripartite-test-meta-delegate-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	s, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	meta := RunMeta{
+		Models:    []string{"claude"},
+		Timeout:   "1m0s",
+		Timestamp: time.Now().Format(time.RFC3339),
+		Mode:      "meta",
+	}
+	turns := []MetaSessionTurn{
+		{
+			Prompt:                "implement feature",
+			Engine:                "delegate",
+			Agent:                 "claude",
+			DecisionAction:        "apply_worktree_branch_ff",
+			DecisionActionSummary: "applied delegate worktree branch \"tripartite/t1/claude\" via fast-forward merge",
+		},
+	}
+	if err := s.SaveMetaSessionSummary(meta, turns); err != nil {
+		t.Fatalf("SaveMetaSessionSummary() error = %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(s.RunDir, "summary.md"))
+	if err != nil {
+		t.Fatalf("read summary.md: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "**Decision Action:** apply_worktree_branch_ff") {
+		t.Fatalf("missing delegate decision action line:\n%s", got)
+	}
+	if !strings.Contains(got, "**Decision Action Result:** applied delegate worktree branch") {
+		t.Fatalf("missing delegate decision action result line:\n%s", got)
+	}
+}
+
+func TestSaveAndLoadMetaSessionState(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "tripartite-test-meta-state-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	s, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	state := MetaSessionState{
+		Turns: []MetaSessionTurn{
+			{Prompt: "p1", Engine: "delegate", Agent: "codex", FinalText: "ok"},
+		},
+		AgentSessions: map[string]string{"codex": "thread-1"},
+	}
+	if err := s.SaveMetaSessionState(state); err != nil {
+		t.Fatalf("SaveMetaSessionState() error = %v", err)
+	}
+
+	got, err := s.LoadMetaSessionState()
+	if err != nil {
+		t.Fatalf("LoadMetaSessionState() error = %v", err)
+	}
+	if len(got.Turns) != 1 || got.Turns[0].Prompt != "p1" {
+		t.Fatalf("loaded turns = %+v, want one turn with prompt p1", got.Turns)
+	}
+	if got.AgentSessions["codex"] != "thread-1" {
+		t.Fatalf("loaded session codex = %q, want %q", got.AgentSessions["codex"], "thread-1")
+	}
+}

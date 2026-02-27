@@ -79,8 +79,10 @@ func (c *CodexAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 // ParseEvent normalizes a single line of Codex JSONL output into an Event.
 func (c *CodexAgent) ParseEvent(line []byte) (Event, error) {
 	var raw struct {
-		Type string `json:"type"`
-		Item struct {
+		Type      string `json:"type"`
+		ThreadID  string `json:"thread_id"`
+		SessionID string `json:"session_id"`
+		Item      struct {
 			Type    string `json:"type"`
 			Content string `json:"content"`
 		} `json:"item"`
@@ -99,6 +101,18 @@ func (c *CodexAgent) ParseEvent(line []byte) (Event, error) {
 	}
 
 	switch raw.Type {
+	case "thread.started", "session.started":
+		sid := raw.ThreadID
+		if sid == "" {
+			sid = raw.SessionID
+		}
+		if sid == "" {
+			return Event{}, fmt.Errorf("codex: %s missing thread/session id", raw.Type)
+		}
+		base.Type = EventSession
+		base.Data = sid
+		return base, nil
+
 	case "item.completed":
 		switch raw.Item.Type {
 		case "agent_message":

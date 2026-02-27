@@ -56,9 +56,10 @@ func runMeta(prompt *string, args []string) {
 	defaultAgent := fs.String("default-agent", "claude", "Default delegate agent")
 	sandbox := fs.String("sandbox", "safe", "Delegate sandbox: safe|write|full")
 	worktreeEnabled := fs.Bool("worktree", false, "Run meta-session delegate turns in isolated git worktrees")
-	cycleEnabled := fs.Bool("cycle", false, "Enable task cycle state machine (experimental)")
+	cycleEnabled := fs.Bool("cycle", true, "Enable task cycle state machine (default: true)")
 	cycleLive := fs.String("cycle-live", "compact", "Cycle live updates: off|compact|verbose")
 	resumeRun := fs.String("resume", "", "Resume a prior cycle from an existing run directory (requires --cycle)")
+	resumeSession := fs.String("resume-session", "", "Resume a prior interactive meta session from an existing run directory")
 	resumeTurn := fs.Int("resume-turn", 0, "Turn number to resume within --resume run (default: latest cycle turn)")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
@@ -71,12 +72,25 @@ func runMeta(prompt *string, args []string) {
 	}
 	log := logger.New(*debug)
 	resumePath := strings.TrimSpace(*resumeRun)
+	resumeSessionPath := strings.TrimSpace(*resumeSession)
+	if resumePath != "" && resumeSessionPath != "" {
+		fmt.Fprintln(os.Stderr, "Error: --resume and --resume-session are mutually exclusive")
+		os.Exit(1)
+	}
 	if resumePath != "" && !*cycleEnabled {
 		fmt.Fprintln(os.Stderr, "Error: --resume requires --cycle")
 		os.Exit(1)
 	}
+	if resumeSessionPath != "" && *cycleEnabled {
+		fmt.Fprintln(os.Stderr, "Error: --resume-session is for non-cycle interactive meta sessions")
+		os.Exit(1)
+	}
 	if resumePath != "" && prompt != nil {
 		fmt.Fprintln(os.Stderr, "Error: --resume cannot be used with a one-shot prompt; start interactive meta session instead")
+		os.Exit(1)
+	}
+	if resumeSessionPath != "" && prompt != nil {
+		fmt.Fprintln(os.Stderr, "Error: --resume-session cannot be used with a one-shot prompt; start interactive meta session instead")
 		os.Exit(1)
 	}
 	if *resumeTurn < 0 {
@@ -161,8 +175,12 @@ func runMeta(prompt *string, args []string) {
 
 	// Initialize artifact store (new run) or attach to an existing run for resume.
 	var s *store.Store
-	if resumePath != "" {
-		abs, err := filepath.Abs(resumePath)
+	resumeDir := resumePath
+	if resumeDir == "" {
+		resumeDir = resumeSessionPath
+	}
+	if resumeDir != "" {
+		abs, err := filepath.Abs(resumeDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to resolve --resume path: %v\n", err)
 			os.Exit(1)
@@ -202,6 +220,15 @@ func runMeta(prompt *string, args []string) {
 		CycleLive:    cycleLiveMode,
 		ResumeCycle:  resumePath != "",
 		ResumeTurn:   *resumeTurn,
+	}
+	if resumeSessionPath != "" {
+		state, err := s.LoadMetaSessionState()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to load session state: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.InitialTurns, cfg.AgentSessions = meta.RestoreSessionState(state)
+		fmt.Printf("Loaded meta session state: %d turn(s), %d agent session(s)\n\n", len(cfg.InitialTurns), len(cfg.AgentSessions))
 	}
 
 	if prompt != nil {
@@ -275,6 +302,13 @@ func runMeta(prompt *string, args []string) {
 			st.Engine = "delegate"
 			st.Agent = turn.Delegate.Agent
 			st.FinalText = turn.Delegate.FinalText
+			st.DecisionAction = turn.Delegate.DecisionAction
+			st.DecisionActionSummary = turn.Delegate.DecisionActionSummary
+			st.Error = turn.Delegate.DecisionActionError
+			if st.DecisionAction == "" && turn.Delegate.Worktree.Enabled && len(turn.Delegate.Worktree.Commits) > 0 {
+				st.DecisionAction = "keep_proposal"
+				st.DecisionActionSummary = "one-shot mode: kept delegate proposal without applying worktree branch; rerun interactive mode to /approve apply action"
+			}
 		}
 		if err := s.SaveMetaSessionSummary(inputMeta, []store.MetaSessionTurn{st}); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to save summary: %v\n", err)
@@ -285,7 +319,7 @@ func runMeta(prompt *string, args []string) {
 	}
 
 	// Interactive mode.
-	if resumePath == "" {
+	if resumeDir == "" {
 		allModels := append(unified.AdapterNames, unified.AgentNames...)
 		inputMeta := store.RunMeta{
 			Models:    allModels,

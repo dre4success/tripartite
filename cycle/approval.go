@@ -6,13 +6,37 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
+// ApprovalKind classifies operator tickets in the control plane.
+type ApprovalKind string
+
+const (
+	ApprovalKindPermission ApprovalKind = "permission"
+	ApprovalKindDecision   ApprovalKind = "decision"
+)
+
+// ApprovalScopeDecisionGate marks decision-gate approval tickets.
+const ApprovalScopeDecisionGate = "decision_gate"
+
+// NormalizeApprovalKind resolves empty/legacy kinds using scope fallback.
+func NormalizeApprovalKind(kind ApprovalKind, scope string) ApprovalKind {
+	if kind != "" {
+		return kind
+	}
+	if strings.EqualFold(strings.TrimSpace(scope), ApprovalScopeDecisionGate) {
+		return ApprovalKindDecision
+	}
+	return ApprovalKindPermission
+}
+
 // PendingApproval represents an approval request waiting for operator input.
 type PendingApproval struct {
 	TicketID    string
+	Kind        ApprovalKind
 	Reason      string
 	Scope       string
 	ResumeState State
@@ -45,6 +69,7 @@ func (b *ApprovalBroker) Request(reason, scope string, resumeState State) *Pendi
 	id := generateTicketID()
 	pa := &PendingApproval{
 		TicketID:    id,
+		Kind:        NormalizeApprovalKind("", scope),
 		Reason:      reason,
 		Scope:       scope,
 		ResumeState: resumeState,

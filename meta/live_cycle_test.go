@@ -168,17 +168,19 @@ func TestLiveCycleUpdatePrinterIncludesPendingApprovalAndClarificationHint(t *te
 	p := &liveCycleUpdatePrinter{mode: LiveCycleCompact}
 
 	snap := &cycle.CycleStatus{
-		State:                 cycle.StateAwaitApproval,
-		Phase:                 "await_approval",
-		Pass:                  0,
-		PendingApprovals:      1,
-		PendingClarifications: 2,
-		MaxRevisions:          3,
+		State:                      cycle.StateAwaitApproval,
+		Phase:                      "await_approval",
+		Pass:                       0,
+		PendingApprovals:           3,
+		PendingPermissionApprovals: 1,
+		PendingDecisionApprovals:   2,
+		PendingClarifications:      2,
+		MaxRevisions:               3,
 	}
 
 	lines := p.Next(snap)
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "approvals=1") || !strings.Contains(joined, "clarifications=2") {
+	if !strings.Contains(joined, "approvals=3") || !strings.Contains(joined, "permissions=1") || !strings.Contains(joined, "decisions=2") || !strings.Contains(joined, "clarifications=2") {
 		t.Fatalf("expected pending counts in live output, got: %v", lines)
 	}
 	if !strings.Contains(joined, "/approve|/deny") || !strings.Contains(joined, "/clarify") {

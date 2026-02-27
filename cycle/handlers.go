@@ -92,12 +92,16 @@ func (cc *cycleContext) planViaStream(ctx context.Context, prompt string) error 
 	if a == nil {
 		return fmt.Errorf("no agent available for planning")
 	}
+	planCwd, err := cc.executionCwd(ctx, Subtask{ID: "plan", Agent: a.Name()})
+	if err != nil {
+		return err
+	}
 
 	var content strings.Builder
-	err := stream.Run(ctx, a, prompt, agent.StreamOpts{
+	err = stream.Run(ctx, a, prompt, agent.StreamOpts{
 		Model:   agent.ResolveModel(a.Name(), a.DefaultModel()),
 		Sandbox: cc.cfg.Sandbox,
-		Cwd:     resolveCwd(Subtask{}, cc.cfg),
+		Cwd:     planCwd,
 	}, stream.Callbacks{
 		OnEvent: func(ev agent.Event) {
 			display.PrintEvent(ev)
@@ -162,12 +166,16 @@ func (cc *cycleContext) handlePlanReview(ctx context.Context) error {
 		fmt.Println("[cycle] PLAN_REVIEW: skipped (no reviewer available)")
 		return cc.enforceNonInteractiveClarificationPolicy()
 	}
+	reviewCwd, err := cc.executionCwd(ctx, Subtask{ID: "plan-review", Agent: a.Name()})
+	if err != nil {
+		return err
+	}
 
 	var content strings.Builder
-	err := stream.Run(ctx, a, reviewPrompt, agent.StreamOpts{
+	err = stream.Run(ctx, a, reviewPrompt, agent.StreamOpts{
 		Model:   agent.ResolveModel(a.Name(), a.DefaultModel()),
 		Sandbox: cc.cfg.Sandbox,
-		Cwd:     resolveCwd(Subtask{}, cc.cfg),
+		Cwd:     reviewCwd,
 	}, stream.Callbacks{
 		OnEvent: func(ev agent.Event) {
 			display.PrintEvent(ev)
@@ -356,12 +364,16 @@ func (cc *cycleContext) handleOutputReview(ctx context.Context) error {
 		fmt.Println("[cycle] OUTPUT_REVIEW: skipped (no reviewer)")
 		return nil
 	}
+	reviewCwd, err := cc.executionCwd(ctx, Subtask{ID: "output-review", Agent: a.Name()})
+	if err != nil {
+		return err
+	}
 
 	var content strings.Builder
-	err := stream.Run(ctx, a, reviewPrompt, agent.StreamOpts{
+	err = stream.Run(ctx, a, reviewPrompt, agent.StreamOpts{
 		Model:   agent.ResolveModel(a.Name(), a.DefaultModel()),
 		Sandbox: cc.cfg.Sandbox,
-		Cwd:     resolveCwd(Subtask{}, cc.cfg),
+		Cwd:     reviewCwd,
 	}, stream.Callbacks{
 		OnEvent: func(ev agent.Event) {
 			display.PrintEvent(ev)
@@ -549,6 +561,7 @@ func (cc *cycleContext) handleAwaitApproval(ctx context.Context) error {
 
 	cc.transcript.Append(KindApprovalRequest, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), ApprovalRequestPayload{
 		TicketID:    pa.TicketID,
+		Kind:        pa.Kind,
 		Reason:      pa.Reason,
 		Scope:       pa.Scope,
 		ResumeState: pa.ResumeState,

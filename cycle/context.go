@@ -185,10 +185,8 @@ func (cc *cycleContext) approvalDenied() bool {
 	}
 	// Denying the final decision gate means "keep proposal" rather than aborting
 	// the cycle. Permission approvals still abort on deny.
-	if cc.lastApproval.Scope == decisionGateApprovalScope {
-		return false
-	}
-	return true
+	kind := NormalizeApprovalKind(cc.lastApproval.Kind, cc.lastApproval.Scope)
+	return kind != ApprovalKindDecision
 }
 
 func (cc *cycleContext) isDecisionApproval() bool {

@@ -37,7 +37,7 @@ func TestRunResumeAwaitApprovalDecisionApproveToDone(t *testing.T) {
 			Payload: ApprovalRequestPayload{
 				TicketID:    "tk-old",
 				Reason:      "Decision required",
-				Scope:       decisionGateApprovalScope,
+				Scope:       ApprovalScopeDecisionGate,
 				ResumeState: StateDone,
 			},
 		},

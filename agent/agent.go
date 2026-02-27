@@ -18,6 +18,7 @@ const (
 	EventToolResult EventType = "tool_result"
 	EventFileChange EventType = "file_change"
 	EventCommand    EventType = "command"
+	EventSession    EventType = "session"
 	EventError      EventType = "error"
 	EventDone       EventType = "done"
 )

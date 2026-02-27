@@ -129,10 +129,11 @@ type DecisionActionPayload struct {
 
 // ApprovalRequestPayload is sent to the operator.
 type ApprovalRequestPayload struct {
-	TicketID    string `json:"ticket_id"`
-	Reason      string `json:"reason"`
-	Scope       string `json:"scope"`
-	ResumeState State  `json:"resume_state"`
+	TicketID    string       `json:"ticket_id"`
+	Kind        ApprovalKind `json:"kind,omitempty"`
+	Reason      string       `json:"reason"`
+	Scope       string       `json:"scope"`
+	ResumeState State        `json:"resume_state"`
 }
 
 // ApprovalResultPayload is the operator's response.

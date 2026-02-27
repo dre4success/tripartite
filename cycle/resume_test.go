@@ -115,7 +115,7 @@ func TestDecodeTranscriptJSON(t *testing.T) {
 			Payload: ApprovalRequestPayload{
 				TicketID:    "tk-1",
 				Reason:      "Decision required",
-				Scope:       decisionGateApprovalScope,
+				Scope:       ApprovalScopeDecisionGate,
 				ResumeState: StateDone,
 			},
 		},

@@ -6,6 +6,28 @@ import (
 	"time"
 )
 
+func TestNormalizeApprovalKind(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  ApprovalKind
+		scope string
+		want  ApprovalKind
+	}{
+		{name: "explicit permission wins", kind: ApprovalKindPermission, scope: ApprovalScopeDecisionGate, want: ApprovalKindPermission},
+		{name: "explicit decision wins", kind: ApprovalKindDecision, scope: "execute", want: ApprovalKindDecision},
+		{name: "scope decision fallback", kind: "", scope: ApprovalScopeDecisionGate, want: ApprovalKindDecision},
+		{name: "default permission fallback", kind: "", scope: "execute", want: ApprovalKindPermission},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeApprovalKind(tt.kind, tt.scope)
+			if got != tt.want {
+				t.Fatalf("NormalizeApprovalKind(%q, %q) = %q, want %q", tt.kind, tt.scope, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestApprovalBrokerWaitUnknownTicket(t *testing.T) {
 	b := NewApprovalBroker()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -19,6 +41,9 @@ func TestApprovalBrokerWaitUnknownTicket(t *testing.T) {
 func TestApprovalBrokerWaitResolve(t *testing.T) {
 	b := NewApprovalBroker()
 	req := b.Request("need write access", "EXECUTE", StateExecute)
+	if req.Kind != ApprovalKindPermission {
+		t.Fatalf("request kind = %q, want %q", req.Kind, ApprovalKindPermission)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -50,5 +75,13 @@ func TestApprovalBrokerWaitResolve(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for approval resolution")
+	}
+}
+
+func TestApprovalBrokerRequestDecisionKindFromScope(t *testing.T) {
+	b := NewApprovalBroker()
+	req := b.Request("decision required", ApprovalScopeDecisionGate, StateDone)
+	if req.Kind != ApprovalKindDecision {
+		t.Fatalf("request kind = %q, want %q", req.Kind, ApprovalKindDecision)
 	}
 }

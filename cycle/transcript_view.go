@@ -295,7 +295,13 @@ func summarizeTranscriptEntry(e Entry) string {
 		}
 	case KindApprovalRequest:
 		if p, ok := e.Payload.(ApprovalRequestPayload); ok {
-			return fmt.Sprintf("approval requested (%s): %s", p.Scope, truncateInline(p.Reason, 80))
+			kind := NormalizeApprovalKind(p.Kind, p.Scope)
+			switch kind {
+			case ApprovalKindDecision:
+				return fmt.Sprintf("decision ticket requested: %s", truncateInline(p.Reason, 80))
+			default:
+				return fmt.Sprintf("approval requested (%s): %s", p.Scope, truncateInline(p.Reason, 80))
+			}
 		}
 	case KindApprovalResult:
 		if p, ok := e.Payload.(ApprovalResultPayload); ok {

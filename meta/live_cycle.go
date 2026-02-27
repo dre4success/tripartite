@@ -51,7 +51,7 @@ func (p *liveCycleUpdatePrinter) Next(snap *cycle.CycleStatus) []string {
 
 	var lines []string
 
-	headerSig := fmt.Sprintf("%s|%s|%d|%s|%d/%d|%d/%d|%d|%d",
+	headerSig := fmt.Sprintf("%s|%s|%d|%s|%d/%d|%d/%d|%d|%d|%d|%d",
 		snap.State,
 		snap.Phase,
 		snap.Pass,
@@ -61,6 +61,8 @@ func (p *liveCycleUpdatePrinter) Next(snap *cycle.CycleStatus) []string {
 		snap.RevisionCount,
 		snap.MaxRevisions,
 		snap.PendingApprovals,
+		snap.PendingPermissionApprovals,
+		snap.PendingDecisionApprovals,
 		snap.PendingClarifications,
 	)
 	if headerSig != p.headerSig {
@@ -70,7 +72,7 @@ func (p *liveCycleUpdatePrinter) Next(snap *cycle.CycleStatus) []string {
 			active = fmt.Sprintf(" active=%s", snap.CurrentSubtask)
 		}
 		lines = append(lines, fmt.Sprintf(
-			"[cycle][live] state=%s phase=%s#%d subtasks=%d/%d revisions=%d/%d approvals=%d clarifications=%d%s",
+			"[cycle][live] state=%s phase=%s#%d subtasks=%d/%d revisions=%d/%d approvals=%d (permissions=%d decisions=%d) clarifications=%d%s",
 			snap.State,
 			snap.Phase,
 			snap.Pass,
@@ -79,17 +81,20 @@ func (p *liveCycleUpdatePrinter) Next(snap *cycle.CycleStatus) []string {
 			snap.RevisionCount,
 			snap.MaxRevisions,
 			snap.PendingApprovals,
+			snap.PendingPermissionApprovals,
+			snap.PendingDecisionApprovals,
 			snap.PendingClarifications,
 			active,
 		))
 	}
-	pendingSig := fmt.Sprintf("%d|%d", snap.PendingApprovals, snap.PendingClarifications)
+	pendingSig := fmt.Sprintf("%d|%d|%d", snap.PendingPermissionApprovals, snap.PendingDecisionApprovals, snap.PendingClarifications)
 	if pendingSig != p.pendingSig {
 		p.pendingSig = pendingSig
-		if snap.PendingApprovals > 0 || snap.PendingClarifications > 0 {
+		if snap.PendingPermissionApprovals > 0 || snap.PendingDecisionApprovals > 0 || snap.PendingClarifications > 0 {
 			lines = append(lines, fmt.Sprintf(
-				"[cycle][live] pending: approvals=%d (/approve|/deny), clarifications=%d (/clarify). Run /status for ticket IDs.",
-				snap.PendingApprovals,
+				"[cycle][live] pending: permissions=%d, decisions=%d (/approve|/deny), clarifications=%d (/clarify). Run /status for ticket IDs.",
+				snap.PendingPermissionApprovals,
+				snap.PendingDecisionApprovals,
 				snap.PendingClarifications,
 			))
 		}

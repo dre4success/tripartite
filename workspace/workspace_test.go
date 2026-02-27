@@ -11,52 +11,85 @@ import (
 )
 
 func TestMergeBranchFF(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
+	t.Run("fast-forward success", func(t *testing.T) {
+		repo := initTestRepo(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
 
-	repo := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+		runGit(t, ctx, repo, "checkout", "-b", "feature/ff")
+		writeFile(t, filepath.Join(repo, "feature.txt"), "feature\n")
+		runGit(t, ctx, repo, "add", "feature.txt")
+		runGit(t, ctx, repo, "commit", "-m", "feature commit")
+		featureHead := strings.TrimSpace(runGit(t, ctx, repo, "rev-parse", "HEAD"))
 
-	runGit(t, ctx, repo, "init")
-	runGit(t, ctx, repo, "config", "user.email", "test@example.com")
-	runGit(t, ctx, repo, "config", "user.name", "Tripartite Test")
+		runGit(t, ctx, repo, "checkout", defaultBranchName(t, ctx, repo))
+		if err := MergeBranchFF(ctx, repo, "feature/ff"); err != nil {
+			t.Fatalf("MergeBranchFF() error = %v", err)
+		}
 
-	writeFile(t, filepath.Join(repo, "README.md"), "base\n")
-	runGit(t, ctx, repo, "add", "README.md")
-	runGit(t, ctx, repo, "commit", "-m", "base")
+		mainHead := strings.TrimSpace(runGit(t, ctx, repo, "rev-parse", "HEAD"))
+		if mainHead != featureHead {
+			t.Fatalf("main HEAD = %s, want %s after ff merge", mainHead, featureHead)
+		}
+	})
 
-	baseBranch := strings.TrimSpace(runGit(t, ctx, repo, "rev-parse", "--abbrev-ref", "HEAD"))
-	runGit(t, ctx, repo, "checkout", "-b", "feature/test")
+	t.Run("non-fast-forward fails", func(t *testing.T) {
+		repo := initTestRepo(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		mainBranch := defaultBranchName(t, ctx, repo)
 
-	writeFile(t, filepath.Join(repo, "README.md"), "base\nfeature\n")
-	runGit(t, ctx, repo, "add", "README.md")
-	runGit(t, ctx, repo, "commit", "-m", "feature")
-	featureSHA := strings.TrimSpace(runGit(t, ctx, repo, "rev-parse", "HEAD"))
+		runGit(t, ctx, repo, "checkout", "-b", "feature/diverge")
+		writeFile(t, filepath.Join(repo, "feature.txt"), "feature\n")
+		runGit(t, ctx, repo, "add", "feature.txt")
+		runGit(t, ctx, repo, "commit", "-m", "feature commit")
+		runGit(t, ctx, repo, "checkout", mainBranch)
+		writeFile(t, filepath.Join(repo, "main.txt"), "main\n")
+		runGit(t, ctx, repo, "add", "main.txt")
+		runGit(t, ctx, repo, "commit", "-m", "main commit")
 
-	runGit(t, ctx, repo, "checkout", baseBranch)
+		if err := MergeBranchFF(ctx, repo, "feature/diverge"); err == nil {
+			t.Fatal("expected non-fast-forward merge to fail")
+		}
+	})
 
-	if err := MergeBranchFF(ctx, repo, "feature/test"); err != nil {
-		t.Fatalf("MergeBranchFF returned error: %v", err)
-	}
-
-	head := strings.TrimSpace(runGit(t, ctx, repo, "rev-parse", "HEAD"))
-	if head != featureSHA {
-		t.Fatalf("HEAD after merge = %s, want %s", head, featureSHA)
-	}
+	t.Run("validates input", func(t *testing.T) {
+		ctx := context.Background()
+		if err := MergeBranchFF(ctx, "", "feature/x"); err == nil {
+			t.Fatal("expected error for empty repo root")
+		}
+		if err := MergeBranchFF(ctx, "/tmp", ""); err == nil {
+			t.Fatal("expected error for empty branch")
+		}
+	})
 }
 
-func TestMergeBranchFFValidation(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+func initTestRepo(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "tripartite-workspace-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	if err := MergeBranchFF(ctx, "", "feature"); err == nil {
-		t.Fatal("expected error for empty repoRoot")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runGit(t, ctx, dir, "init")
+	runGit(t, ctx, dir, "config", "user.name", "Tripartite Test")
+	runGit(t, ctx, dir, "config", "user.email", "tripartite@example.com")
+	writeFile(t, filepath.Join(dir, "README.md"), "init\n")
+	runGit(t, ctx, dir, "add", "README.md")
+	runGit(t, ctx, dir, "commit", "-m", "initial commit")
+	return dir
+}
+
+func defaultBranchName(t *testing.T, ctx context.Context, repo string) string {
+	t.Helper()
+	name := strings.TrimSpace(runGit(t, ctx, repo, "rev-parse", "--abbrev-ref", "HEAD"))
+	if name == "" {
+		return "main"
 	}
-	if err := MergeBranchFF(ctx, t.TempDir(), "   "); err == nil {
-		t.Fatal("expected error for empty branch")
-	}
+	return name
 }
 
 func runGit(t *testing.T, ctx context.Context, repo string, args ...string) string {

@@ -26,7 +26,7 @@ func (g *GeminiAgent) SupportedModels() []string {
 	return []string{"2.5-pro", "2.5-flash", "3"}
 }
 
-func (g *GeminiAgent) DefaultModel() string  { return "gemini-2.5-pro" }
+func (g *GeminiAgent) DefaultModel() string   { return "gemini-2.5-pro" }
 func (g *GeminiAgent) PromptMode() PromptMode { return PromptArg }
 
 func (g *GeminiAgent) BlockedEnvVars() []string {
@@ -38,6 +38,19 @@ func (g *GeminiAgent) ContinuationArgs(sessionID string) []string {
 	return nil
 }
 
+func mapGeminiSandbox(level string) string {
+	switch level {
+	case "safe":
+		return "read-only"
+	case "write":
+		return "workspace-write"
+	case "full":
+		return "danger-full-access"
+	default:
+		return ""
+	}
+}
+
 func (g *GeminiAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 	args := []string{"--output-format", "stream-json"}
 	switch g.PromptMode() {
@@ -47,10 +60,9 @@ func (g *GeminiAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 		// Fallback to stdin handled by runner
 	}
 
-	if opts.Sandbox != "" {
-		args = append(args, "--sandbox")
+	if sandbox := mapGeminiSandbox(opts.Sandbox); sandbox != "" {
+		args = append(args, "--sandbox", sandbox)
 	}
-
 
 	model := opts.Model
 	if model == "" {
@@ -69,9 +81,10 @@ func (g *GeminiAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 // ParseEvent normalizes a single line of Gemini's JSONL output into an Event.
 func (g *GeminiAgent) ParseEvent(line []byte) (Event, error) {
 	var raw struct {
-		Type    string `json:"type"`
-		Content string `json:"content"`
-		Message string `json:"message"`
+		Type      string `json:"type"`
+		Content   string `json:"content"`
+		Message   string `json:"message"`
+		SessionID string `json:"session_id"`
 	}
 
 	if err := json.Unmarshal(line, &raw); err != nil {
@@ -86,6 +99,14 @@ func (g *GeminiAgent) ParseEvent(line []byte) (Event, error) {
 	}
 
 	switch raw.Type {
+	case "session", "session.started":
+		if raw.SessionID == "" {
+			return Event{}, fmt.Errorf("gemini: %s missing session id", raw.Type)
+		}
+		base.Type = EventSession
+		base.Data = raw.SessionID
+		return base, nil
+
 	case "message":
 		base.Type = EventText
 		base.Data = raw.Content

@@ -18,30 +18,32 @@ type SubtaskStatus struct {
 
 // CycleStatus is a point-in-time snapshot of cycle progress.
 type CycleStatus struct {
-	CycleID               string                  `json:"cycle_id"`
-	State                 State                   `json:"state"`
-	Phase                 string                  `json:"phase"`
-	Pass                  int                     `json:"pass"`
-	StartedAt             time.Time               `json:"started_at"`
-	Elapsed               time.Duration           `json:"elapsed"`
-	CurrentSubtask        string                  `json:"current_subtask,omitempty"`
-	TotalSubtasks         int                     `json:"total_subtasks"`
-	CompletedSubtasks     int                     `json:"completed_subtasks"`
-	Subtasks              []SubtaskStatus         `json:"subtasks,omitempty"`
-	RevisionCount         int                     `json:"revision_count"`
-	MaxRevisions          int                     `json:"max_revisions"`
-	RetryCount            map[string]int          `json:"retry_count,omitempty"`
-	PendingApprovals      int                     `json:"pending_approvals"`
-	PendingClarifications int                     `json:"pending_clarifications"`
-	LastError             string                  `json:"last_error,omitempty"`
-	TaskType              string                  `json:"task_type,omitempty"`
-	Intent                string                  `json:"intent,omitempty"`
-	TranscriptLen         int                     `json:"transcript_len"`
-	LastTranscript        TranscriptStatusSummary `json:"last_transcript,omitempty"`
-	CurrentReview         *ReviewPassStats        `json:"current_review,omitempty"`
-	CurrentBoard          *PhaseBoardSummary      `json:"current_board,omitempty"`
-	RecentTimeline        []TimelineEvent         `json:"recent_timeline,omitempty"`
-	RecentTimelineCap     int                     `json:"recent_timeline_cap,omitempty"`
+	CycleID                    string                  `json:"cycle_id"`
+	State                      State                   `json:"state"`
+	Phase                      string                  `json:"phase"`
+	Pass                       int                     `json:"pass"`
+	StartedAt                  time.Time               `json:"started_at"`
+	Elapsed                    time.Duration           `json:"elapsed"`
+	CurrentSubtask             string                  `json:"current_subtask,omitempty"`
+	TotalSubtasks              int                     `json:"total_subtasks"`
+	CompletedSubtasks          int                     `json:"completed_subtasks"`
+	Subtasks                   []SubtaskStatus         `json:"subtasks,omitempty"`
+	RevisionCount              int                     `json:"revision_count"`
+	MaxRevisions               int                     `json:"max_revisions"`
+	RetryCount                 map[string]int          `json:"retry_count,omitempty"`
+	PendingApprovals           int                     `json:"pending_approvals"`
+	PendingPermissionApprovals int                     `json:"pending_permission_approvals"`
+	PendingDecisionApprovals   int                     `json:"pending_decision_approvals"`
+	PendingClarifications      int                     `json:"pending_clarifications"`
+	LastError                  string                  `json:"last_error,omitempty"`
+	TaskType                   string                  `json:"task_type,omitempty"`
+	Intent                     string                  `json:"intent,omitempty"`
+	TranscriptLen              int                     `json:"transcript_len"`
+	LastTranscript             TranscriptStatusSummary `json:"last_transcript,omitempty"`
+	CurrentReview              *ReviewPassStats        `json:"current_review,omitempty"`
+	CurrentBoard               *PhaseBoardSummary      `json:"current_board,omitempty"`
+	RecentTimeline             []TimelineEvent         `json:"recent_timeline,omitempty"`
+	RecentTimelineCap          int                     `json:"recent_timeline_cap,omitempty"`
 }
 
 // StatusProvider is a thread-safe snapshot store.
