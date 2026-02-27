@@ -1,6 +1,9 @@
 package cycle
 
-import "testing"
+import (
+	"testing"
+	"github.com/dre4success/tripartite/adapter"
+)
 
 func TestParseReviewLineTags(t *testing.T) {
 	tests := []struct {
@@ -89,3 +92,28 @@ func TestParseReviewFindingsFromTextStructuredClarification(t *testing.T) {
 		t.Fatal("finding[1].ClarificationQuestion should not be empty")
 	}
 }
+
+func TestParsePlanFromResponses_Fallback(t *testing.T) {
+	// Round 1 has a good plan.
+	r1 := []adapter.Response{
+		{
+			ExitCode: 0,
+			Content: "## Subtasks\n1. [agent] task one\n2. [agent] task two",
+		},
+	}
+	// Round 2 is empty/failed.
+	r2 := []adapter.Response{
+		{
+			ExitCode: 1, // failed
+			Content:  "",
+		},
+	}
+
+	rounds := [][]adapter.Response{r1, r2}
+	plan := parsePlanFromResponses(rounds)
+
+	if len(plan.Subtasks) != 2 {
+		t.Errorf("expected 2 subtasks from fallback, got %d", len(plan.Subtasks))
+	}
+}
+

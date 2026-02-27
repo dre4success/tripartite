@@ -181,6 +181,9 @@ func (s *Store) SaveDelegateSummary(summary DelegateSummary) error {
 // (flat layout for one-shot mode).
 func (s *Store) SaveResponse(round int, resp adapter.Response) error {
 	dir := filepath.Join(s.RunDir, fmt.Sprintf("round-%d", round))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create %s: %w", dir, err)
+	}
 	filename := resp.Model + ".json"
 	return s.writeJSON(filepath.Join(dir, filename), resp)
 }

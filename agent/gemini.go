@@ -38,16 +38,14 @@ func (g *GeminiAgent) ContinuationArgs(sessionID string) []string {
 	return nil
 }
 
-func mapGeminiSandbox(level string) string {
+func mapGeminiSandbox(level string) bool {
 	switch level {
 	case "safe":
-		return "read-only"
-	case "write":
-		return "workspace-write"
-	case "full":
-		return "danger-full-access"
+		return true // Enforce strict sandbox
+	case "write", "full":
+		return false // No sandbox (or rely on tripartite's worktree isolation)
 	default:
-		return ""
+		return false
 	}
 }
 
@@ -60,8 +58,8 @@ func (g *GeminiAgent) StreamCommand(prompt string, opts StreamOpts) *exec.Cmd {
 		// Fallback to stdin handled by runner
 	}
 
-	if sandbox := mapGeminiSandbox(opts.Sandbox); sandbox != "" {
-		args = append(args, "--sandbox", sandbox)
+	if mapGeminiSandbox(opts.Sandbox) {
+		args = append(args, "--sandbox")
 	}
 
 	model := opts.Model
@@ -130,6 +128,15 @@ func (g *GeminiAgent) ParseEvent(line []byte) (Event, error) {
 	case "error":
 		base.Type = EventError
 		base.Data = raw.Message
+		return base, nil
+
+	case "init":
+		// Initialization event contains the session ID.
+		if raw.SessionID == "" {
+			return Event{}, fmt.Errorf("gemini: %s missing session id", raw.Type)
+		}
+		base.Type = EventSession
+		base.Data = raw.SessionID
 		return base, nil
 
 	default:

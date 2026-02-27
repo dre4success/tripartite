@@ -149,25 +149,59 @@ func buildRevisionPrompt(subtask Subtask, blockers []ReviewFindingPayload, trans
 }
 
 // parsePlanFromResponses extracts a PlanPayload from multi-model brainstorm responses.
-// It merges goals and subtasks from all successful responses.
+// It prioritizes the most detailed plan from the final synthesis round to avoid naive concatenation.
+// If the final round fails to produce a plan, it falls back to earlier rounds.
 func parsePlanFromResponses(rounds [][]adapter.Response) *PlanPayload {
-	plan := &PlanPayload{}
-	for _, round := range rounds {
+	if len(rounds) == 0 {
+		return &PlanPayload{}
+	}
+
+	var bestPlan *PlanPayload
+
+	// Iterate backwards through rounds (starting with final synthesis)
+	for i := len(rounds) - 1; i >= 0; i-- {
+		round := rounds[i]
 		for _, resp := range round {
 			if resp.ExitCode != 0 || resp.Content == "" {
 				continue
 			}
-			partial := parsePlanFromText(resp.Content)
-			plan.Goals = mergeUnique(plan.Goals, partial.Goals)
-			plan.Subtasks = mergeSubtasks(plan.Subtasks, partial.Subtasks)
-			plan.Risks = mergeUnique(plan.Risks, partial.Risks)
-			plan.SuccessCriteria = mergeUnique(plan.SuccessCriteria, partial.SuccessCriteria)
-			if partial.Permissions != "" && plan.Permissions == "" {
-				plan.Permissions = partial.Permissions
+			p := parsePlanFromText(resp.Content)
+			if bestPlan == nil || len(p.Subtasks) > len(bestPlan.Subtasks) {
+				bestPlan = p
 			}
 		}
+		// If we found a valid plan in this round, break and don't look at earlier rounds
+		if bestPlan != nil && len(bestPlan.Subtasks) > 0 {
+			break
+		}
 	}
-	return plan
+
+	if bestPlan == nil {
+		bestPlan = &PlanPayload{}
+	}
+
+	// Canonicalize subtasks: deduplicate exact matches, reindex IDs, normalize roles.
+	var out []Subtask
+	seen := make(map[string]bool)
+	for _, st := range bestPlan.Subtasks {
+		if seen[st.Description] {
+			continue
+		}
+		seen[st.Description] = true
+
+		st.ID = fmt.Sprintf("st-%d", len(out)+1)
+
+		// Normalize generic agent names
+		role := strings.ToLower(strings.TrimSpace(st.Agent))
+		if role == "executor" || role == "agent" || role == "assistant" || role == "coordinator" {
+			st.Agent = "" // Let the coordinator assign the default/implementer
+		}
+
+		out = append(out, st)
+	}
+	bestPlan.Subtasks = out
+
+	return bestPlan
 }
 
 // parsePlanFromText extracts a PlanPayload from a single text response
@@ -178,8 +212,19 @@ func parsePlanFromText(text string) *PlanPayload {
 
 	var section string
 	subtaskCounter := 0
+	inFence := false
+	
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		
+		if strings.HasPrefix(trimmed, "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue // Skip everything inside markdown code fences
+		}
+		
 		lower := strings.ToLower(trimmed)
 
 		// Detect section headings.
@@ -420,30 +465,3 @@ func splitTargetSummary(s string) (target, summary string) {
 	return "", s
 }
 
-func mergeUnique(a, b []string) []string {
-	seen := make(map[string]bool, len(a))
-	for _, s := range a {
-		seen[s] = true
-	}
-	for _, s := range b {
-		if !seen[s] {
-			a = append(a, s)
-			seen[s] = true
-		}
-	}
-	return a
-}
-
-func mergeSubtasks(a, b []Subtask) []Subtask {
-	seen := make(map[string]bool, len(a))
-	for _, s := range a {
-		seen[s.Description] = true
-	}
-	for _, s := range b {
-		if !seen[s.Description] {
-			a = append(a, s)
-			seen[s.Description] = true
-		}
-	}
-	return a
-}
