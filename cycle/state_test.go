@@ -26,13 +26,34 @@ func TestTransitionTable(t *testing.T) {
 
 		// PLAN_REVIEW transitions.
 		{name: "PLAN_REVIEW→EXECUTE_no_approval", state: StatePlanReview, setup: func(cc *cycleContext) {
+			cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+			cc.plan = &PlanPayload{
+				Permissions: "read",
+				Subtasks:    []Subtask{{ID: "st-1", Description: "implement change"}},
+			}
+		}, expected: StateExecute},
+		{name: "PLAN_REVIEW→AWAIT_CLARIFICATION_ambiguous_plan", state: StatePlanReview, setup: func(cc *cycleContext) {
+			cc.cfg.Clarifier = NewClarificationBroker()
+			cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+			cc.plan = &PlanPayload{Permissions: "read"}
+		}, expected: StateAwaitClarification},
+		{name: "PLAN_REVIEW→EXECUTE_ambiguous_plan_without_clarifier", state: StatePlanReview, setup: func(cc *cycleContext) {
+			cc.intent = &IntentPayload{TaskType: TaskCodeChange}
 			cc.plan = &PlanPayload{Permissions: "read"}
 		}, expected: StateExecute},
 		{name: "PLAN_REVIEW→AWAIT_APPROVAL_edit", state: StatePlanReview, setup: func(cc *cycleContext) {
-			cc.plan = &PlanPayload{Permissions: "edit"}
+			cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+			cc.plan = &PlanPayload{
+				Permissions: "edit",
+				Subtasks:    []Subtask{{ID: "st-1", Description: "implement change"}},
+			}
 		}, expected: StateAwaitApproval},
 		{name: "PLAN_REVIEW→AWAIT_APPROVAL_full", state: StatePlanReview, setup: func(cc *cycleContext) {
-			cc.plan = &PlanPayload{Permissions: "full"}
+			cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+			cc.plan = &PlanPayload{
+				Permissions: "full",
+				Subtasks:    []Subtask{{ID: "st-1", Description: "implement change"}},
+			}
 		}, expected: StateAwaitApproval},
 
 		// EXECUTE transitions.
@@ -84,6 +105,9 @@ func TestTransitionTable(t *testing.T) {
 			cc.resumeState = StateExecute
 			cc.lastApproval = &PendingApproval{Approved: false}
 		}, expected: StateAborted},
+		{name: "AWAIT_CLARIFICATION→resume", state: StateAwaitClarification, setup: func(cc *cycleContext) {
+			cc.resumeState = StatePlan
+		}, expected: StatePlan},
 
 		// RECOVERING transitions.
 		{name: "RECOVERING→EXECUTE_can_retry", state: StateRecovering, setup: func(cc *cycleContext) {
@@ -178,6 +202,33 @@ func TestConditionCheckers(t *testing.T) {
 		cc.intent.TaskType = TaskCodeChange
 		if !cc.requiresOperatorDecision() {
 			t.Error("code_change should require operator")
+		}
+	})
+
+	t.Run("needsClarification", func(t *testing.T) {
+		cc := newCycleContext(Config{})
+		cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+		cc.plan = &PlanPayload{Permissions: "read"}
+		if !cc.needsClarification() {
+			t.Fatal("expected clarification when plan has no subtasks for code_change")
+		}
+		if cc.pendingClarification != "" {
+			t.Fatal("needsClarification should not mutate pendingClarification")
+		}
+
+		cc.clarificationCount = DefaultGuards().MaxClarifications
+		if cc.needsClarification() {
+			t.Fatal("did not expect clarification when clarification budget is exhausted")
+		}
+
+		cc = newCycleContext(Config{})
+		cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+		cc.plan = &PlanPayload{
+			Permissions: "read",
+			Subtasks:    []Subtask{{ID: "st-1", Description: "implement change"}},
+		}
+		if cc.needsClarification() {
+			t.Fatal("did not expect clarification when plan has concrete subtasks")
 		}
 	})
 }
@@ -335,7 +386,11 @@ func TestStateChangeMetadataUsesSourcePhaseAndPass(t *testing.T) {
 		cc.state = StatePlanReview
 		cc.currentPhase = phaseName(StatePlanReview)
 		cc.planReviewPassCount = 1
-		cc.plan = &PlanPayload{Permissions: "read"}
+		cc.intent = &IntentPayload{TaskType: TaskCodeChange}
+		cc.plan = &PlanPayload{
+			Permissions: "read",
+			Subtasks:    []Subtask{{ID: "st-1", Description: "implement change"}},
+		}
 
 		to := transition(cc.state, cc) // read -> EXECUTE
 		cc.appendStateChange(cc.state, to)

@@ -20,6 +20,10 @@ func TestParseSlashCommand(t *testing.T) {
 		{name: "exit", input: "/exit", wantCmd: "exit", wantArg: ""},
 		{name: "history", input: "/history", wantCmd: "history", wantArg: ""},
 		{name: "board", input: "/board", wantCmd: "board", wantArg: ""},
+		{name: "resume", input: "/resume", wantCmd: "resume", wantArg: ""},
+		{name: "resume_with_arg", input: "/resume 3", wantCmd: "resume", wantArg: "3"},
+		{name: "clarify", input: "/clarify answer", wantCmd: "clarify", wantArg: "answer"},
+		{name: "clarify_with_ticket", input: "/clarify cq-123 answer", wantCmd: "clarify", wantArg: "cq-123 answer"},
 		{name: "timeline", input: "/timeline", wantCmd: "timeline", wantArg: ""},
 		{name: "timeline_with_arg", input: "/timeline 5", wantCmd: "timeline", wantArg: "5"},
 		{name: "live_with_arg", input: "/live verbose", wantCmd: "live", wantArg: "verbose"},
@@ -42,6 +46,76 @@ func TestParseSlashCommand(t *testing.T) {
 			}
 			if arg != tt.wantArg {
 				t.Errorf("parseSlashCommand(%q) arg = %q, want %q", tt.input, arg, tt.wantArg)
+			}
+		})
+	}
+}
+
+func TestParseResumeTurnArg(t *testing.T) {
+	tests := []struct {
+		name    string
+		arg     string
+		want    int
+		wantErr bool
+	}{
+		{name: "empty_uses_latest", arg: "", want: 0},
+		{name: "whitespace_uses_latest", arg: "   ", want: 0},
+		{name: "positive_turn", arg: "4", want: 4},
+		{name: "zero_invalid", arg: "0", wantErr: true},
+		{name: "negative_invalid", arg: "-1", wantErr: true},
+		{name: "non_numeric_invalid", arg: "abc", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseResumeTurnArg(tt.arg)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (value=%d)", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("value = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseClarifyArg(t *testing.T) {
+	tests := []struct {
+		name       string
+		arg        string
+		wantTicket string
+		wantAnswer string
+		wantErr    bool
+	}{
+		{name: "answer_only", arg: "please scope to auth module", wantTicket: "", wantAnswer: "please scope to auth module"},
+		{name: "ticket_and_answer", arg: "cq-1234 include migration notes", wantTicket: "cq-1234", wantAnswer: "include migration notes"},
+		{name: "ticket_without_answer_invalid", arg: "cq-1234", wantErr: true},
+		{name: "empty_invalid", arg: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTicket, gotAnswer, err := parseClarifyArg(tt.arg)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (ticket=%q answer=%q)", gotTicket, gotAnswer)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotTicket != tt.wantTicket {
+				t.Fatalf("ticket = %q, want %q", gotTicket, tt.wantTicket)
+			}
+			if gotAnswer != tt.wantAnswer {
+				t.Fatalf("answer = %q, want %q", gotAnswer, tt.wantAnswer)
 			}
 		})
 	}

@@ -20,10 +20,14 @@ type cycleContext struct {
 	decisionApproveAction string
 	decisionDenyAction    string
 	revisionCount         int
+	clarificationCount    int
+	pendingClarification  string
+	clarifications        []string
 	retryCount            map[string]int // subtask ID → retry count
 	resumeState           State          // state to resume after AWAIT_APPROVAL
 	lastError             error
 	lastApproval          *PendingApproval
+	lastClarification     *PendingClarification
 	worktreeInfo          store.DelegateWorkspace
 	startedAt             time.Time
 	// Phase/pass tracking for transcript entries.
@@ -189,6 +193,61 @@ func (cc *cycleContext) approvalDenied() bool {
 
 func (cc *cycleContext) isDecisionApproval() bool {
 	return cc.resumeState == StateDone && cc.decision != nil
+}
+
+func (cc *cycleContext) needsClarification() bool {
+	_, ok := cc.clarificationCandidate()
+	return ok
+}
+
+func (cc *cycleContext) clarificationCandidate() (string, bool) {
+	if cc.intent == nil || cc.intent.TaskType == TaskDiscuss {
+		return "", false
+	}
+	maxClarifications := cc.cfg.Guards.MaxClarifications
+	if maxClarifications == 0 {
+		maxClarifications = DefaultGuards().MaxClarifications
+	}
+	if cc.clarificationCount >= maxClarifications {
+		return "", false
+	}
+
+	if cc.plan == nil || len(cc.plan.Subtasks) == 0 {
+		return "I need one clarification before implementation: what concrete deliverable should I produce first?", true
+	}
+	for _, st := range cc.plan.Subtasks {
+		if strings.TrimSpace(st.Description) == "" {
+			return "One or more subtasks have no description. Please clarify the expected concrete deliverable.", true
+		}
+	}
+
+	// Allow review-driven clarification requests via tagged findings.
+	// Keep matching conservative to avoid false positives from general wording.
+	for _, f := range cc.latestReviewFindings(StatePlanReview) {
+		target := strings.ToLower(strings.TrimSpace(f.Target))
+		summary := strings.ToLower(strings.TrimSpace(f.Summary))
+		if target == "clarification" || strings.HasPrefix(summary, "clarification:") || strings.HasPrefix(summary, "needs clarification:") {
+			question := strings.TrimSpace(f.Summary)
+			if question == "" {
+				question = "Plan review marked the request as ambiguous. Please clarify the intended implementation scope."
+			}
+			return question, true
+		}
+	}
+	return "", false
+}
+
+func (cc *cycleContext) clarificationQuestion() string {
+	q := strings.TrimSpace(cc.pendingClarification)
+	if q == "" {
+		if suggested, ok := cc.clarificationCandidate(); ok {
+			q = suggested
+		}
+	}
+	if q == "" {
+		q = "Please clarify the implementation scope before continuing."
+	}
+	return q
 }
 
 // latestReviewFindings returns review findings for the most recent visit to the given state.

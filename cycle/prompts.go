@@ -22,6 +22,24 @@ func buildPlanPrompt(objective string) string {
 	return b.String()
 }
 
+func buildPlanPromptWithClarifications(objective string, clarifications []string) string {
+	base := buildPlanPrompt(objective)
+	if len(clarifications) == 0 {
+		return base
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString("\n\n## Operator Clarifications\n")
+	for _, c := range clarifications {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "- %s\n", c)
+	}
+	return b.String()
+}
+
 // buildPlanReviewPrompt creates a cross-review prompt for a plan.
 func buildPlanReviewPrompt(plan *PlanPayload) string {
 	var b strings.Builder

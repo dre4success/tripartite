@@ -56,6 +56,10 @@ func transition(state State, cc *cycleContext) State {
 		return StatePlanReview
 
 	case StatePlanReview:
+		if cc.cfg.Clarifier != nil && cc.needsClarification() {
+			cc.resumeState = StatePlan
+			return StateAwaitClarification
+		}
 		if cc.needsApproval() {
 			cc.resumeState = StateExecute
 			return StateAwaitApproval
@@ -93,6 +97,12 @@ func transition(state State, cc *cycleContext) State {
 		}
 		return cc.resumeState
 
+	case StateAwaitClarification:
+		if cc.resumeState == "" {
+			return StatePlan
+		}
+		return cc.resumeState
+
 	case StateRecovering:
 		if cc.canRetry() {
 			return StateExecute
@@ -117,70 +127,8 @@ func generateCycleID() string {
 // to abort the cycle (e.g. via /stop).
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	cc := newCycleContext(cfg)
-	start := time.Now()
-	cc.startedAt = start
-
-	// Apply runtime timeout guard.
-	maxRuntime := cfg.Guards.MaxTotalRuntime
-	if maxRuntime == 0 {
-		maxRuntime = DefaultGuards().MaxTotalRuntime
-	}
-	ctx, cancel := context.WithTimeout(ctx, maxRuntime)
-	defer cancel()
-
-	for {
-		// Check context (covers both explicit cancel and MaxTotalRuntime).
-		if err := ctx.Err(); err != nil {
-			cc.transcript.Append(KindError, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), "cycle timed out or cancelled")
-			cc.state = StateAborted
-			break
-		}
-
-		// Terminal states.
-		if cc.state == StateDone || cc.state == StateAborted {
-			break
-		}
-
-		// Checkpoint + publish status.
-		if cfg.Store != nil {
-			checkpoint(cfg.Store, cfg.TurnNum, cc, time.Since(start))
-		}
-		cc.pushStatus()
-
-		// Handle current state.
-		if err := cc.handle(ctx); err != nil {
-			cc.lastError = err
-			cc.transcript.Append(KindError, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), err.Error())
-			// For handler errors in non-EXECUTE states, abort.
-			if cc.state != StateExecute {
-				cc.state = StateAborted
-				break
-			}
-		}
-
-		// Deterministic transition.
-		fromState := cc.state
-		cc.state = transition(fromState, cc)
-		cc.appendStateChange(fromState, cc.state)
-	}
-
-	// Final checkpoint + status.
-	elapsed := time.Since(start)
-	cc.pushStatus()
-	cc.finalizeWorktree()
-	if cfg.Store != nil {
-		checkpoint(cfg.Store, cfg.TurnNum, cc, elapsed)
-		saveFinalTranscript(cfg.Store, cfg.TurnNum, cc)
-	}
-
-	return &Result{
-		CycleID:    cc.cycleID,
-		FinalState: cc.state,
-		Transcript: cc.transcript,
-		Plan:       cc.plan,
-		Decision:   cc.decision,
-		Elapsed:    elapsed,
-	}, nil
+	cc.startedAt = time.Now()
+	return runLoop(ctx, cc)
 }
 
 // publishStatus pushes a CycleStatus snapshot to the StatusProvider (if configured).

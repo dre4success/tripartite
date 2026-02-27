@@ -18,6 +18,8 @@ const (
 	KindDecision        EntryKind = "decision"
 	KindApprovalRequest EntryKind = "approval_request"
 	KindApprovalResult  EntryKind = "approval_result"
+	KindClarifyRequest  EntryKind = "clarify_request"
+	KindClarifyResult   EntryKind = "clarify_result"
 	KindStateChange     EntryKind = "state_change"
 	KindError           EntryKind = "error"
 )
@@ -126,6 +128,19 @@ type ApprovalResultPayload struct {
 	TicketID string `json:"ticket_id"`
 	Approved bool   `json:"approved"`
 	Comment  string `json:"comment,omitempty"`
+}
+
+// ClarificationRequestPayload is sent to the operator when the cycle needs more detail.
+type ClarificationRequestPayload struct {
+	TicketID    string `json:"ticket_id"`
+	Question    string `json:"question"`
+	ResumeState State  `json:"resume_state"`
+}
+
+// ClarificationResultPayload is the operator's clarification response.
+type ClarificationResultPayload struct {
+	TicketID string `json:"ticket_id"`
+	Answer   string `json:"answer"`
 }
 
 // StateChangePayload records a state transition.

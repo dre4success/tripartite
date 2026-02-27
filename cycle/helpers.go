@@ -111,6 +111,11 @@ func checkpoint(s *store.Store, turnNum int, cc *cycleContext, elapsed time.Dura
 	if err := s.SaveCycleCheckpoint(turnNum, cp); err != nil {
 		fmt.Printf("[warn] failed to save cycle checkpoint: %v\n", err)
 	}
+	// Persist the transcript snapshot on each checkpoint so interrupted runs
+	// can be resumed without waiting for finalization.
+	if err := s.SaveCycleTranscript(turnNum, cc.transcript.Entries()); err != nil {
+		fmt.Printf("[warn] failed to save cycle transcript checkpoint: %v\n", err)
+	}
 }
 
 // saveFinalTranscript saves the complete transcript to the store.

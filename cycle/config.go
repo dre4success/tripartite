@@ -24,6 +24,7 @@ type Config struct {
 	TurnNum      int
 	Guards       Guards
 	Broker       *ApprovalBroker
+	Clarifier    *ClarificationBroker
 	Status       *StatusProvider
 }
 
@@ -32,6 +33,7 @@ type Guards struct {
 	MaxTotalRuntime   time.Duration
 	MaxRevisionLoops  int
 	MaxRetriesPerTask int
+	MaxClarifications int
 	QuorumMin         int
 	SkipPlanReview    bool
 	SkipOutputReview  bool
@@ -43,6 +45,7 @@ func DefaultGuards() Guards {
 		MaxTotalRuntime:   30 * time.Minute,
 		MaxRevisionLoops:  3,
 		MaxRetriesPerTask: 2,
+		MaxClarifications: 2,
 		QuorumMin:         2,
 	}
 }

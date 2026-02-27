@@ -52,6 +52,9 @@ func (cc *cycleContext) handleIntake(_ context.Context) error {
 // For multi-adapter setups, uses orchestrator brainstorm. For single-agent, uses stream.
 func (cc *cycleContext) handlePlan(ctx context.Context) error {
 	planPrompt := buildPlanPrompt(cc.cfg.Prompt)
+	if len(cc.clarifications) > 0 {
+		planPrompt = buildPlanPromptWithClarifications(cc.cfg.Prompt, cc.clarifications)
+	}
 
 	if len(cc.cfg.Adapters) >= 2 || (len(cc.cfg.Adapters) >= 1 && len(cc.cfg.Agents) == 0) {
 		// Multi-model brainstorm for plan generation.
@@ -588,9 +591,45 @@ func (cc *cycleContext) handleAwaitApproval(ctx context.Context) error {
 }
 
 // handleAwaitClarification blocks on REPL input for clarification.
-func (cc *cycleContext) handleAwaitClarification(_ context.Context) error {
-	// Placeholder — clarification requires deeper REPL integration.
-	fmt.Println("[cycle] AWAIT_CLARIFICATION: not yet implemented, skipping")
+func (cc *cycleContext) handleAwaitClarification(ctx context.Context) error {
+	clarifier := cc.cfg.Clarifier
+	if clarifier == nil {
+		// No clarifier available (e.g. non-interactive run) — skip this interrupt.
+		fmt.Println("[cycle] AWAIT_CLARIFICATION: skipped (no clarification broker)")
+		return nil
+	}
+
+	question := cc.clarificationQuestion()
+	pc := clarifier.Request(question, cc.resumeState)
+	cc.transcript.Append(KindClarifyRequest, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), ClarificationRequestPayload{
+		TicketID:    pc.TicketID,
+		Question:    pc.Question,
+		ResumeState: pc.ResumeState,
+	})
+	cc.pushStatus()
+
+	fmt.Printf("[cycle] AWAIT_CLARIFICATION: waiting for operator (ticket %s)\n", pc.TicketID)
+	fmt.Printf("  Question: %s\n", pc.Question)
+	fmt.Printf("  Use /clarify %s <answer>\n", pc.TicketID)
+
+	resolved, err := clarifier.Wait(ctx, pc.TicketID)
+	if err != nil {
+		return fmt.Errorf("clarification wait: %w", err)
+	}
+	cc.lastClarification = resolved
+	cc.clarificationCount++
+	answer := strings.TrimSpace(resolved.Answer)
+	if answer != "" {
+		cc.clarifications = append(cc.clarifications, answer)
+	}
+	cc.pendingClarification = ""
+
+	cc.transcript.Append(KindClarifyResult, "operator", cc.state, cc.currentPhase, cc.currentPass(), ClarificationResultPayload{
+		TicketID: resolved.TicketID,
+		Answer:   answer,
+	})
+	cc.pushStatus()
+	fmt.Printf("[cycle] CLARIFIED: %s\n", resolved.TicketID)
 	return nil
 }
 

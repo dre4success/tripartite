@@ -287,6 +287,14 @@ func summarizeTranscriptEntry(e Entry) string {
 			}
 			return fmt.Sprintf("approval %s (%s)", result, p.TicketID)
 		}
+	case KindClarifyRequest:
+		if p, ok := e.Payload.(ClarificationRequestPayload); ok {
+			return fmt.Sprintf("clarification requested: %s", truncateInline(p.Question, 80))
+		}
+	case KindClarifyResult:
+		if p, ok := e.Payload.(ClarificationResultPayload); ok {
+			return fmt.Sprintf("clarification received (%s): %s", p.TicketID, truncateInline(p.Answer, 80))
+		}
 	case KindError:
 		if s, ok := e.Payload.(string); ok {
 			return truncateInline(s, 100)

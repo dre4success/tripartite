@@ -25,14 +25,14 @@ type PendingApproval struct {
 type ApprovalBroker struct {
 	mu      sync.Mutex
 	pending map[string]*PendingApproval
-	notify  chan string // ticketID when resolved
+	waiters map[string]chan struct{} // ticketID -> closed on resolve
 }
 
 // NewApprovalBroker creates a new broker.
 func NewApprovalBroker() *ApprovalBroker {
 	return &ApprovalBroker{
 		pending: make(map[string]*PendingApproval),
-		notify:  make(chan string, 16),
+		waiters: make(map[string]chan struct{}),
 	}
 }
 
@@ -60,15 +60,18 @@ func (b *ApprovalBroker) Resolve(ticketID string, approved bool, comment string)
 		b.mu.Unlock()
 		return fmt.Errorf("unknown approval ticket %q", ticketID)
 	}
+	alreadyResolved := pa.Resolved
 	pa.Resolved = true
 	pa.Approved = approved
 	pa.Comment = comment
+	waitCh, hasWaiter := b.waiters[ticketID]
+	if hasWaiter {
+		delete(b.waiters, ticketID)
+	}
 	b.mu.Unlock()
 
-	// Non-blocking send; buffer should be large enough.
-	select {
-	case b.notify <- ticketID:
-	default:
+	if !alreadyResolved && hasWaiter {
+		close(waitCh)
 	}
 	return nil
 }
@@ -78,23 +81,21 @@ func (b *ApprovalBroker) Wait(ctx context.Context, ticketID string) (*PendingApp
 	for {
 		b.mu.Lock()
 		pa, ok := b.pending[ticketID]
-		if ok && pa.Resolved {
+		if !ok {
+			b.mu.Unlock()
+			return nil, fmt.Errorf("unknown approval ticket %q", ticketID)
+		}
+		if pa.Resolved {
 			b.mu.Unlock()
 			return pa, nil
 		}
+		waitCh := b.waiterForLocked(ticketID)
 		b.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case resolved := <-b.notify:
-			if resolved == ticketID {
-				b.mu.Lock()
-				pa := b.pending[ticketID]
-				b.mu.Unlock()
-				return pa, nil
-			}
-			// Not our ticket, loop again.
+		case <-waitCh:
 		}
 	}
 }
@@ -119,4 +120,13 @@ func generateTicketID() string {
 		return fmt.Sprintf("tk-%d", time.Now().UnixNano())
 	}
 	return "tk-" + hex.EncodeToString(b[:])
+}
+
+func (b *ApprovalBroker) waiterForLocked(ticketID string) chan struct{} {
+	ch, ok := b.waiters[ticketID]
+	if !ok {
+		ch = make(chan struct{})
+		b.waiters[ticketID] = ch
+	}
+	return ch
 }

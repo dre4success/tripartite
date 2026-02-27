@@ -58,6 +58,8 @@ func runMeta(prompt *string, args []string) {
 	worktreeEnabled := fs.Bool("worktree", false, "Run meta-session delegate turns in isolated git worktrees")
 	cycleEnabled := fs.Bool("cycle", false, "Enable task cycle state machine (experimental)")
 	cycleLive := fs.String("cycle-live", "compact", "Cycle live updates: off|compact|verbose")
+	resumeRun := fs.String("resume", "", "Resume a prior cycle from an existing run directory (requires --cycle)")
+	resumeTurn := fs.Int("resume-turn", 0, "Turn number to resume within --resume run (default: latest cycle turn)")
 	runsDir := fs.String("runs-dir", "./runs", "Directory for run artifacts")
 	debug := fs.Bool("debug", false, "Print structured diagnostics to stderr")
 	allowAPIKeys := fs.Bool("allow-api-keys", false, "Don't fail if API key env vars are set")
@@ -68,6 +70,23 @@ func runMeta(prompt *string, args []string) {
 		}
 	}
 	log := logger.New(*debug)
+	resumePath := strings.TrimSpace(*resumeRun)
+	if resumePath != "" && !*cycleEnabled {
+		fmt.Fprintln(os.Stderr, "Error: --resume requires --cycle")
+		os.Exit(1)
+	}
+	if resumePath != "" && prompt != nil {
+		fmt.Fprintln(os.Stderr, "Error: --resume cannot be used with a one-shot prompt; start interactive meta session instead")
+		os.Exit(1)
+	}
+	if *resumeTurn < 0 {
+		fmt.Fprintln(os.Stderr, "Error: --resume-turn must be >= 0")
+		os.Exit(1)
+	}
+	if *resumeTurn > 0 && resumePath == "" {
+		fmt.Fprintln(os.Stderr, "Error: --resume-turn requires --resume")
+		os.Exit(1)
+	}
 
 	approvalLevel, err := adapter.ParseApprovalLevel(*approval)
 	if err != nil {
@@ -140,11 +159,31 @@ func runMeta(prompt *string, args []string) {
 	}
 	fmt.Println()
 
-	// Initialize artifact store.
-	s, err := store.New(*runsDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create run directory: %v\n", err)
-		os.Exit(1)
+	// Initialize artifact store (new run) or attach to an existing run for resume.
+	var s *store.Store
+	if resumePath != "" {
+		abs, err := filepath.Abs(resumePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to resolve --resume path: %v\n", err)
+			os.Exit(1)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open --resume path: %v\n", err)
+			os.Exit(1)
+		}
+		if !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "Error: --resume path is not a directory: %s\n", abs)
+			os.Exit(1)
+		}
+		s = &store.Store{BaseDir: filepath.Dir(abs), RunDir: abs}
+		fmt.Printf("Resuming existing run directory: %s\n\n", s.RunDir)
+	} else {
+		s, err = store.New(*runsDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create run directory: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	ctx := context.Background()
@@ -161,6 +200,8 @@ func runMeta(prompt *string, args []string) {
 		DefaultAgent: *defaultAgent,
 		CycleEnabled: *cycleEnabled,
 		CycleLive:    cycleLiveMode,
+		ResumeCycle:  resumePath != "",
+		ResumeTurn:   *resumeTurn,
 	}
 
 	if prompt != nil {
@@ -237,16 +278,18 @@ func runMeta(prompt *string, args []string) {
 	}
 
 	// Interactive mode.
-	allModels := append(unified.AdapterNames, unified.AgentNames...)
-	inputMeta := store.RunMeta{
-		Models:    allModels,
-		Timeout:   timeout.String(),
-		Timestamp: time.Now().Format(time.RFC3339),
-		Mode:      "meta-interactive",
-	}
-	if err := s.SaveInput(inputMeta); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to save input metadata: %v\n", err)
-		os.Exit(1)
+	if resumePath == "" {
+		allModels := append(unified.AdapterNames, unified.AgentNames...)
+		inputMeta := store.RunMeta{
+			Models:    allModels,
+			Timeout:   timeout.String(),
+			Timestamp: time.Now().Format(time.RFC3339),
+			Mode:      "meta-interactive",
+		}
+		if err := s.SaveInput(inputMeta); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to save input metadata: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if err := meta.Start(ctx, cfg); err != nil {
@@ -480,4 +523,3 @@ func runBrainstorm(args []string) {
 
 	fmt.Printf("\nRun artifacts saved to: %s\n", s.RunDir)
 }
-
