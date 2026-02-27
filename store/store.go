@@ -274,14 +274,16 @@ func (s *Store) SaveSessionSummary(meta RunMeta, turns []SessionTurn) error {
 
 // MetaSessionTurn captures one turn of a meta session (either engine).
 type MetaSessionTurn struct {
-	Prompt     string               `json:"prompt"`
-	Engine     string               `json:"engine"`                // "brainstorm" or "delegate"
-	Agent      string               `json:"agent,omitempty"`       // delegate agent name
-	CycleID    string               `json:"cycle_id,omitempty"`    // cycle identifier
-	CycleState string               `json:"cycle_state,omitempty"` // cycle final state
-	Responses  [][]adapter.Response `json:"responses,omitempty"`   // brainstorm rounds
-	FinalText  string               `json:"final_text,omitempty"`  // delegate collected text
-	Error      string               `json:"error,omitempty"`       // delegate/cycle error summary
+	Prompt                string               `json:"prompt"`
+	Engine                string               `json:"engine"`                            // "brainstorm" or "delegate"
+	Agent                 string               `json:"agent,omitempty"`                   // delegate agent name
+	CycleID               string               `json:"cycle_id,omitempty"`                // cycle identifier
+	CycleState            string               `json:"cycle_state,omitempty"`             // cycle final state
+	DecisionAction        string               `json:"decision_action,omitempty"`         // selected decision gate action
+	DecisionActionSummary string               `json:"decision_action_summary,omitempty"` // operator action result
+	Responses             [][]adapter.Response `json:"responses,omitempty"`               // brainstorm rounds
+	FinalText             string               `json:"final_text,omitempty"`              // delegate collected text
+	Error                 string               `json:"error,omitempty"`                   // delegate/cycle error summary
 }
 
 // SaveMetaSessionSummary writes a summary.md for a meta session with mixed engine turns.
@@ -338,6 +340,12 @@ func (s *Store) SaveMetaSessionSummary(meta RunMeta, turns []MetaSessionTurn) er
 			}
 			if turn.CycleState != "" {
 				fmt.Fprintf(&b, "**Final State:** %s\n\n", turn.CycleState)
+			}
+			if turn.DecisionAction != "" {
+				fmt.Fprintf(&b, "**Decision Action:** %s\n\n", turn.DecisionAction)
+			}
+			if turn.DecisionActionSummary != "" {
+				fmt.Fprintf(&b, "**Decision Action Result:** %s\n\n", turn.DecisionActionSummary)
 			}
 			if turn.Error != "" {
 				fmt.Fprintf(&b, "**Error:** %s\n\n", turn.Error)

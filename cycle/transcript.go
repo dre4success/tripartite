@@ -16,6 +16,7 @@ const (
 	KindClaim           EntryKind = "claim"
 	KindReviewFinding   EntryKind = "review_finding"
 	KindDecision        EntryKind = "decision"
+	KindDecisionAction  EntryKind = "decision_action"
 	KindApprovalRequest EntryKind = "approval_request"
 	KindApprovalResult  EntryKind = "approval_result"
 	KindClarifyRequest  EntryKind = "clarify_request"
@@ -99,11 +100,13 @@ type ArtifactPayload struct {
 
 // ReviewFindingPayload is the OUTPUT_REVIEW output.
 type ReviewFindingPayload struct {
-	Reviewer  string   `json:"reviewer"`
-	Target    string   `json:"target"`
-	Severity  Severity `json:"severity"`
-	Summary   string   `json:"summary"`
-	Suggested string   `json:"suggested,omitempty"`
+	Reviewer              string   `json:"reviewer"`
+	Target                string   `json:"target"`
+	Severity              Severity `json:"severity"`
+	Summary               string   `json:"summary"`
+	Suggested             string   `json:"suggested,omitempty"`
+	NeedsClarification    bool     `json:"needs_clarification,omitempty"`
+	ClarificationQuestion string   `json:"clarification_question,omitempty"`
 }
 
 // DecisionPayload is the DECISION_GATE output.
@@ -113,6 +116,15 @@ type DecisionPayload struct {
 	Tradeoffs      []string `json:"tradeoffs,omitempty"`
 	Note           string   `json:"note,omitempty"`
 	Actions        []string `json:"actions,omitempty"`
+}
+
+// DecisionActionPayload records the concrete operator-selected action at DECISION_GATE.
+type DecisionActionPayload struct {
+	Action    string `json:"action"`
+	Succeeded bool   `json:"succeeded"`
+	Summary   string `json:"summary,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ApprovalRequestPayload is sent to the operator.

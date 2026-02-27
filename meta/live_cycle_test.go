@@ -164,6 +164,28 @@ func TestLiveCycleUpdatePrinterBoardTimelineIsIncrementalWithinSamePass(t *testi
 	}
 }
 
+func TestLiveCycleUpdatePrinterIncludesPendingApprovalAndClarificationHint(t *testing.T) {
+	p := &liveCycleUpdatePrinter{mode: LiveCycleCompact}
+
+	snap := &cycle.CycleStatus{
+		State:                 cycle.StateAwaitApproval,
+		Phase:                 "await_approval",
+		Pass:                  0,
+		PendingApprovals:      1,
+		PendingClarifications: 2,
+		MaxRevisions:          3,
+	}
+
+	lines := p.Next(snap)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "approvals=1") || !strings.Contains(joined, "clarifications=2") {
+		t.Fatalf("expected pending counts in live output, got: %v", lines)
+	}
+	if !strings.Contains(joined, "/approve|/deny") || !strings.Contains(joined, "/clarify") {
+		t.Fatalf("expected operator action hints in live output, got: %v", lines)
+	}
+}
+
 func TestParseLiveCycleVerbosity(t *testing.T) {
 	tests := []struct {
 		in      string

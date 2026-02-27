@@ -104,14 +104,22 @@ func runLoop(ctx context.Context, cc *cycleContext) (*Result, error) {
 		checkpoint(cc.cfg.Store, cc.cfg.TurnNum, cc, elapsed)
 		saveFinalTranscript(cc.cfg.Store, cc.cfg.TurnNum, cc)
 	}
+	var decisionAction *DecisionActionPayload
+	if last := cc.transcript.Last(KindDecisionAction); last != nil {
+		if p, ok := last.Payload.(DecisionActionPayload); ok {
+			pp := p
+			decisionAction = &pp
+		}
+	}
 
 	return &Result{
-		CycleID:    cc.cycleID,
-		FinalState: cc.state,
-		Transcript: cc.transcript,
-		Plan:       cc.plan,
-		Decision:   cc.decision,
-		Elapsed:    elapsed,
+		CycleID:        cc.cycleID,
+		FinalState:     cc.state,
+		Transcript:     cc.transcript,
+		Plan:           cc.plan,
+		Decision:       cc.decision,
+		DecisionAction: decisionAction,
+		Elapsed:        elapsed,
 	}, nil
 }
 
@@ -536,6 +544,9 @@ func decodeEntryPayload(kind EntryKind, raw json.RawMessage) (any, error) {
 		return p, json.Unmarshal(raw, &p)
 	case KindDecision:
 		var p DecisionPayload
+		return p, json.Unmarshal(raw, &p)
+	case KindDecisionAction:
+		var p DecisionActionPayload
 		return p, json.Unmarshal(raw, &p)
 	case KindApprovalRequest:
 		var p ApprovalRequestPayload

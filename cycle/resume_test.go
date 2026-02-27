@@ -119,6 +119,19 @@ func TestDecodeTranscriptJSON(t *testing.T) {
 				ResumeState: StateDone,
 			},
 		},
+		{
+			ID:        4,
+			Kind:      KindDecisionAction,
+			Timestamp: now.Add(3 * time.Second),
+			Agent:     "coordinator",
+			State:     StateAwaitApproval,
+			Phase:     "await_approval",
+			Payload: DecisionActionPayload{
+				Action:    decisionActionAcceptResult,
+				Succeeded: true,
+				Summary:   "decision action: accepted cycle result without applying changes",
+			},
+		},
 	}
 
 	data, err := json.Marshal(entries)
@@ -146,6 +159,17 @@ func TestDecodeTranscriptJSON(t *testing.T) {
 	}
 	if len(dp.Actions) != 1 || dp.Actions[0] != decisionActionAcceptResult {
 		t.Fatalf("decision actions = %#v", dp.Actions)
+	}
+	act := tr.Last(KindDecisionAction)
+	if act == nil {
+		t.Fatal("missing decision_action entry")
+	}
+	ap, ok := act.Payload.(DecisionActionPayload)
+	if !ok {
+		t.Fatalf("decision_action payload type = %T", act.Payload)
+	}
+	if ap.Action != decisionActionAcceptResult || !ap.Succeeded {
+		t.Fatalf("decision_action payload = %#v", ap)
 	}
 }
 

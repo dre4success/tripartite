@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dre4success/tripartite/adapter"
+	"github.com/dre4success/tripartite/cycle"
 	"github.com/dre4success/tripartite/orchestrator"
 	"github.com/dre4success/tripartite/router"
 )
@@ -119,6 +120,88 @@ func TestParseClarifyArg(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveApprovalTicket(t *testing.T) {
+	pending := []*cycle.PendingApproval{
+		{TicketID: "tk-1"},
+		{TicketID: "tk-2"},
+	}
+
+	t.Run("explicit ticket wins", func(t *testing.T) {
+		got, err := resolveApprovalTicket("tk-99", pending)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "tk-99" {
+			t.Fatalf("ticket = %q, want %q", got, "tk-99")
+		}
+	})
+
+	t.Run("single pending auto-selects", func(t *testing.T) {
+		got, err := resolveApprovalTicket("", pending[:1])
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "tk-1" {
+			t.Fatalf("ticket = %q, want %q", got, "tk-1")
+		}
+	})
+
+	t.Run("none pending errors", func(t *testing.T) {
+		_, err := resolveApprovalTicket("", nil)
+		if err == nil || !strings.Contains(err.Error(), "no pending approvals") {
+			t.Fatalf("err = %v, want no pending approvals", err)
+		}
+	})
+
+	t.Run("multiple pending requires ticket", func(t *testing.T) {
+		_, err := resolveApprovalTicket("", pending)
+		if err == nil || !strings.Contains(err.Error(), "multiple pending approvals") {
+			t.Fatalf("err = %v, want multiple pending approvals", err)
+		}
+	})
+}
+
+func TestResolveClarificationTicket(t *testing.T) {
+	pending := []*cycle.PendingClarification{
+		{TicketID: "cq-1"},
+		{TicketID: "cq-2"},
+	}
+
+	t.Run("explicit ticket wins", func(t *testing.T) {
+		got, err := resolveClarificationTicket("cq-9", pending)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "cq-9" {
+			t.Fatalf("ticket = %q, want %q", got, "cq-9")
+		}
+	})
+
+	t.Run("single pending auto-selects", func(t *testing.T) {
+		got, err := resolveClarificationTicket("", pending[:1])
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "cq-1" {
+			t.Fatalf("ticket = %q, want %q", got, "cq-1")
+		}
+	})
+
+	t.Run("none pending errors", func(t *testing.T) {
+		_, err := resolveClarificationTicket("", nil)
+		if err == nil || !strings.Contains(err.Error(), "no pending clarifications") {
+			t.Fatalf("err = %v, want no pending clarifications", err)
+		}
+	})
+
+	t.Run("multiple pending requires ticket", func(t *testing.T) {
+		_, err := resolveClarificationTicket("", pending)
+		if err == nil || !strings.Contains(err.Error(), "multiple pending clarifications") {
+			t.Fatalf("err = %v, want multiple pending clarifications", err)
+		}
+	})
 }
 
 func TestAdjustRouteForAvailability(t *testing.T) {

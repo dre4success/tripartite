@@ -7,8 +7,6 @@ import (
 )
 
 func TestClarificationBrokerWaitUnknownTicket(t *testing.T) {
-	t.Parallel()
-
 	b := NewClarificationBroker()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

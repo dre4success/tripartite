@@ -264,11 +264,29 @@ func summarizeTranscriptEntry(e Entry) string {
 			if target == "" {
 				target = "general"
 			}
-			return fmt.Sprintf("[%s] %s: %s", p.Severity, target, truncateInline(p.Summary, 80))
+			clarify := ""
+			if p.NeedsClarification {
+				clarify = "[clarify] "
+			}
+			return fmt.Sprintf("[%s] %s%s: %s", p.Severity, clarify, target, truncateInline(p.Summary, 80))
 		}
 	case KindDecision:
 		if p, ok := e.Payload.(DecisionPayload); ok {
 			return truncateInline(firstNonEmptyLine(p.Recommendation), 100)
+		}
+	case KindDecisionAction:
+		if p, ok := e.Payload.(DecisionActionPayload); ok {
+			if p.Succeeded {
+				if p.Summary != "" {
+					return truncateInline(p.Summary, 100)
+				}
+				return fmt.Sprintf("decision action %s: completed", p.Action)
+			}
+			msg := p.Error
+			if strings.TrimSpace(msg) == "" {
+				msg = "failed"
+			}
+			return fmt.Sprintf("decision action %s: %s", p.Action, truncateInline(msg, 80))
 		}
 	case KindClaim:
 		switch p := e.Payload.(type) {

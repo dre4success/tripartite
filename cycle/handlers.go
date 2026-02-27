@@ -153,14 +153,14 @@ func (cc *cycleContext) handlePlanReview(ctx context.Context) error {
 			cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, cc.currentPhase, cc.currentPass(), f)
 		}
 		fmt.Printf("[cycle] PLAN_REVIEW: %d findings\n", len(findings))
-		return nil
+		return cc.enforceNonInteractiveClarificationPolicy()
 	}
 
 	// Single-agent review fallback.
 	a := cc.pickStreamAgent()
 	if a == nil {
 		fmt.Println("[cycle] PLAN_REVIEW: skipped (no reviewer available)")
-		return nil
+		return cc.enforceNonInteractiveClarificationPolicy()
 	}
 
 	var content strings.Builder
@@ -190,7 +190,7 @@ func (cc *cycleContext) handlePlanReview(ctx context.Context) error {
 		cc.transcript.Append(KindReviewFinding, f.Reviewer, cc.state, cc.currentPhase, cc.currentPass(), f)
 	}
 	fmt.Printf("[cycle] PLAN_REVIEW: %d findings\n", len(findings))
-	return nil
+	return cc.enforceNonInteractiveClarificationPolicy()
 }
 
 // handleExecute runs each subtask sequentially via stream.
@@ -749,6 +749,25 @@ func (cc *cycleContext) saveStderrLine(line []byte) {
 	if err := cc.cfg.Store.SaveMetaTurnDelegateStderrLine(cc.cfg.TurnNum, line); err != nil {
 		fmt.Printf("[warn] failed to save stderr: %v\n", err)
 	}
+}
+
+// enforceNonInteractiveClarificationPolicy applies the one-shot clarification policy.
+// Policy: strict-fail when clarification is required but no clarification broker exists.
+func (cc *cycleContext) enforceNonInteractiveClarificationPolicy() error {
+	if cc.cfg.Clarifier != nil {
+		return nil
+	}
+	question, ok := cc.clarificationCandidate()
+	if !ok {
+		return nil
+	}
+	cc.pendingClarification = question
+	cc.transcript.Append(KindClarifyRequest, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), ClarificationRequestPayload{
+		TicketID:    "non-interactive",
+		Question:    question,
+		ResumeState: StatePlan,
+	})
+	return fmt.Errorf("clarification required but interactive clarification is unavailable in non-interactive mode; rerun interactive cycle and answer /clarify: %s", question)
 }
 
 // Ensure display is used.

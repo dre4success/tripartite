@@ -221,18 +221,19 @@ func (cc *cycleContext) clarificationCandidate() (string, bool) {
 		}
 	}
 
-	// Allow review-driven clarification requests via tagged findings.
-	// Keep matching conservative to avoid false positives from general wording.
+	// Allow review-driven clarification requests via explicit structured flags.
 	for _, f := range cc.latestReviewFindings(StatePlanReview) {
-		target := strings.ToLower(strings.TrimSpace(f.Target))
-		summary := strings.ToLower(strings.TrimSpace(f.Summary))
-		if target == "clarification" || strings.HasPrefix(summary, "clarification:") || strings.HasPrefix(summary, "needs clarification:") {
-			question := strings.TrimSpace(f.Summary)
-			if question == "" {
-				question = "Plan review marked the request as ambiguous. Please clarify the intended implementation scope."
-			}
-			return question, true
+		if !f.NeedsClarification {
+			continue
 		}
+		question := strings.TrimSpace(f.ClarificationQuestion)
+		if question == "" {
+			question = strings.TrimSpace(f.Summary)
+		}
+		if question == "" {
+			question = "Plan review marked the request as ambiguous. Please clarify the intended implementation scope."
+		}
+		return question, true
 	}
 	return "", false
 }

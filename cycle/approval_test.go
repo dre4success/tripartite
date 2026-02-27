@@ -7,8 +7,6 @@ import (
 )
 
 func TestApprovalBrokerWaitUnknownTicket(t *testing.T) {
-	t.Parallel()
-
 	b := NewApprovalBroker()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -19,8 +17,6 @@ func TestApprovalBrokerWaitUnknownTicket(t *testing.T) {
 }
 
 func TestApprovalBrokerWaitResolve(t *testing.T) {
-	t.Parallel()
-
 	b := NewApprovalBroker()
 	req := b.Request("need write access", "EXECUTE", StateExecute)
 

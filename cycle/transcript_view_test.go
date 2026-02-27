@@ -178,3 +178,20 @@ func TestTranscriptRecentTimeline(t *testing.T) {
 		t.Fatalf("event[3] = %+v, want coordinator approval_request", got[3])
 	}
 }
+
+func TestTranscriptStatusSummaryDecisionAction(t *testing.T) {
+	tr := NewTranscript()
+	tr.Append(KindDecisionAction, "coordinator", StateAwaitApproval, "await_approval", 0, DecisionActionPayload{
+		Action:    decisionActionAcceptResult,
+		Succeeded: true,
+		Summary:   "decision action: accepted cycle result without applying changes",
+	})
+
+	s := tr.StatusSummary("await_approval", 0)
+	if s.LastKind != KindDecisionAction {
+		t.Fatalf("LastKind = %s, want %s", s.LastKind, KindDecisionAction)
+	}
+	if s.LastSummary == "" {
+		t.Fatal("LastSummary should not be empty for decision_action entry")
+	}
+}

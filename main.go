@@ -239,6 +239,13 @@ func runMeta(prompt *string, args []string) {
 			if result.Decision != nil {
 				cycleTurn.FinalText = result.Decision.Recommendation
 			}
+			if result.DecisionAction != nil {
+				cycleTurn.DecisionAction = result.DecisionAction.Action
+				cycleTurn.DecisionActionSummary = result.DecisionAction.Summary
+				if cycleTurn.Error == "" {
+					cycleTurn.Error = result.DecisionAction.Error
+				}
+			}
 			if result.FinalState == "ABORTED" && cycleTurn.FinalText == "" {
 				cycleTurn.Error = "cycle aborted"
 			}

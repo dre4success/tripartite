@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dre4success/tripartite/adapter"
@@ -309,30 +310,42 @@ func (cc *cycleContext) runDecisionAction(ctx context.Context, action string) er
 		return nil
 	}
 
-	var summary string
+	payload := DecisionActionPayload{
+		Action: action,
+	}
+	var actionErr error
 	switch action {
 	case decisionActionAcceptResult:
-		summary = "decision action: accepted cycle result without applying changes"
+		payload.Succeeded = true
+		payload.Summary = "decision action: accepted cycle result without applying changes"
 		fmt.Println("[cycle] Decision action: accepted result (no apply)")
 	case decisionActionKeepProposal:
-		summary = "decision action: kept result as proposal (no apply)"
+		payload.Succeeded = true
+		payload.Summary = "decision action: kept result as proposal (no apply)"
 		fmt.Println("[cycle] Decision action: kept proposal (no apply)")
 	case decisionActionApplyWorktreeFF:
-		if !cc.worktreeInfo.Enabled || cc.worktreeInfo.Branch == "" {
-			return fmt.Errorf("decision action %q unavailable: no worktree branch", action)
+		payload.Branch = strings.TrimSpace(cc.worktreeInfo.Branch)
+		if !cc.worktreeInfo.Enabled || payload.Branch == "" {
+			actionErr = fmt.Errorf("decision action %q unavailable: no worktree branch", action)
+			payload.Error = actionErr.Error()
+			break
 		}
 		repoRoot := resolveCwd(Subtask{}, cc.cfg)
-		if err := workspace.MergeBranchFF(ctx, repoRoot, cc.worktreeInfo.Branch); err != nil {
-			return fmt.Errorf("apply worktree branch %q: %w", cc.worktreeInfo.Branch, err)
+		if err := workspace.MergeBranchFF(ctx, repoRoot, payload.Branch); err != nil {
+			actionErr = fmt.Errorf("apply worktree branch %q: %w", payload.Branch, err)
+			payload.Error = actionErr.Error()
+			break
 		}
-		summary = fmt.Sprintf("decision action: applied worktree branch %q via fast-forward merge", cc.worktreeInfo.Branch)
-		fmt.Printf("[cycle] Decision action: applied worktree branch %s (ff-only)\n", cc.worktreeInfo.Branch)
+		payload.Succeeded = true
+		payload.Summary = fmt.Sprintf("decision action: applied worktree branch %q via fast-forward merge", payload.Branch)
+		fmt.Printf("[cycle] Decision action: applied worktree branch %s (ff-only)\n", payload.Branch)
 	default:
-		return fmt.Errorf("unknown decision action %q", action)
+		actionErr = fmt.Errorf("unknown decision action %q", action)
+		payload.Error = actionErr.Error()
 	}
 
-	cc.transcript.Append(KindClaim, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), summary)
-	return nil
+	cc.transcript.Append(KindDecisionAction, "coordinator", cc.state, cc.currentPhase, cc.currentPass(), payload)
+	return actionErr
 }
 
 // resolveCwd determines the working directory for a subtask.

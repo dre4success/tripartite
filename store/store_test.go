@@ -110,7 +110,7 @@ func TestStorePartialDelegateWrites(t *testing.T) {
 	if err := s.SaveDelegateRawLine(rawLine1); err != nil {
 		t.Errorf("SaveDelegateRawLine() error = %v", err)
 	}
-	
+
 	rawLine2 := []byte(`{"raw":true,"step":2}`)
 	if err := s.SaveDelegateRawLine(rawLine2); err != nil {
 		t.Errorf("SaveDelegateRawLine() error = %v", err)
@@ -122,9 +122,58 @@ func TestStorePartialDelegateWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected file events.raw.jsonl not found or readable: %v", err)
 	}
-	
+
 	contentStr := string(content)
 	if !strings.Contains(contentStr, "step\":1") || !strings.Contains(contentStr, "step\":2") {
 		t.Errorf("file events.raw.jsonl missing expected content, got: %s", contentStr)
+	}
+}
+
+func TestSaveMetaSessionSummaryIncludesCycleDecisionAction(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "tripartite-test-meta-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	s, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	meta := RunMeta{
+		Prompt:    "test prompt",
+		Models:    []string{"claude", "codex", "gemini"},
+		Timeout:   "1m0s",
+		Timestamp: time.Now().Format(time.RFC3339),
+		Mode:      "meta",
+	}
+	turns := []MetaSessionTurn{
+		{
+			Prompt:                "apply changes",
+			Engine:                "cycle",
+			CycleID:               "cycle-123",
+			CycleState:            "DONE",
+			DecisionAction:        "apply_worktree_branch_ff",
+			DecisionActionSummary: "decision action: applied worktree branch \"feature/test\" via fast-forward merge",
+			FinalText:             "recommendation text",
+		},
+	}
+
+	if err := s.SaveMetaSessionSummary(meta, turns); err != nil {
+		t.Fatalf("SaveMetaSessionSummary() error = %v", err)
+	}
+
+	path := filepath.Join(s.RunDir, "summary.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read summary.md: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "**Decision Action:** apply_worktree_branch_ff") {
+		t.Fatalf("summary missing decision action line:\n%s", got)
+	}
+	if !strings.Contains(got, "**Decision Action Result:** decision action: applied worktree branch") {
+		t.Fatalf("summary missing decision action result line:\n%s", got)
 	}
 }

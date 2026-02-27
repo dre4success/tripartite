@@ -63,6 +63,11 @@ func buildPlanReviewPrompt(plan *PlanPayload) string {
 		fmt.Fprintf(&b, "- %s\n", c)
 	}
 	b.WriteString("\nProvide your review with severity tags: [info], [warn], or [blocker] for each finding.\n")
+	b.WriteString("If a finding requires operator clarification before implementation can proceed, include [clarify] in that finding.\n")
+	b.WriteString("Format each finding as: [severity] [clarify?] target: summary\n")
+	b.WriteString("Examples:\n")
+	b.WriteString("- [warn] st-2: Add rollback step for failed migration\n")
+	b.WriteString("- [blocker][clarify] clarification: Which schema version should be considered source of truth?\n")
 	return b.String()
 }
 
@@ -122,7 +127,8 @@ func buildOutputReviewPrompt(artifacts []ArtifactPayload, plan *PlanPayload) str
 	}
 
 	b.WriteString("For each finding, use severity tags: [info], [warn], or [blocker].\n")
-	b.WriteString("Format: [severity] target: summary\n")
+	b.WriteString("If a finding requires operator clarification before implementation can proceed, include [clarify].\n")
+	b.WriteString("Format: [severity] [clarify?] target: summary\n")
 	return b.String()
 }
 
@@ -283,32 +289,65 @@ func parseReviewFindingsFromText(reviewer, text string) []ReviewFindingPayload {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		trimmed = strings.TrimLeft(trimmed, "-*0123456789. ")
+		if trimmed == "" {
+			continue
+		}
 
-		var sev Severity
-		var rest string
-		switch {
-		case strings.HasPrefix(strings.ToLower(trimmed), "[blocker]"):
-			sev = SeverityBlocker
-			rest = strings.TrimSpace(trimmed[len("[blocker]"):])
-		case strings.HasPrefix(strings.ToLower(trimmed), "[warn]"):
-			sev = SeverityWarn
-			rest = strings.TrimSpace(trimmed[len("[warn]"):])
-		case strings.HasPrefix(strings.ToLower(trimmed), "[info]"):
-			sev = SeverityInfo
-			rest = strings.TrimSpace(trimmed[len("[info]"):])
-		default:
+		sev, needsClarification, rest, ok := parseReviewLineTags(trimmed)
+		if !ok {
 			continue
 		}
 
 		target, summary := splitTargetSummary(rest)
-		findings = append(findings, ReviewFindingPayload{
+		finding := ReviewFindingPayload{
 			Reviewer: reviewer,
 			Target:   target,
 			Severity: sev,
 			Summary:  summary,
-		})
+		}
+		if needsClarification {
+			finding.NeedsClarification = true
+			finding.ClarificationQuestion = summary
+		}
+		findings = append(findings, finding)
 	}
 	return findings
+}
+
+func parseReviewLineTags(line string) (Severity, bool, string, bool) {
+	rest := strings.TrimSpace(line)
+	if rest == "" {
+		return "", false, "", false
+	}
+
+	var sev Severity
+	needsClarification := false
+	parsedAnyTag := false
+
+	for strings.HasPrefix(rest, "[") {
+		end := strings.Index(rest, "]")
+		if end <= 1 {
+			break
+		}
+		tag := strings.ToLower(strings.TrimSpace(rest[1:end]))
+		parsedAnyTag = true
+		switch tag {
+		case "blocker":
+			sev = SeverityBlocker
+		case "warn", "warning":
+			sev = SeverityWarn
+		case "info":
+			sev = SeverityInfo
+		case "clarify":
+			needsClarification = true
+		}
+		rest = strings.TrimSpace(rest[end+1:])
+	}
+
+	if !parsedAnyTag || sev == "" || rest == "" {
+		return "", false, "", false
+	}
+	return sev, needsClarification, rest, true
 }
 
 // buildRecommendation produces a human-readable summary for the decision gate.

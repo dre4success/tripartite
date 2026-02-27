@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -111,6 +112,9 @@ func (b *ApprovalBroker) Pending() []*PendingApproval {
 			out = append(out, pa)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].TicketID < out[j].TicketID
+	})
 	return out
 }
 

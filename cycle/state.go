@@ -31,12 +31,13 @@ const (
 
 // Result holds the outcome of a completed cycle.
 type Result struct {
-	CycleID    string
-	FinalState State
-	Transcript *Transcript
-	Plan       *PlanPayload
-	Decision   *DecisionPayload
-	Elapsed    time.Duration
+	CycleID        string
+	FinalState     State
+	Transcript     *Transcript
+	Plan           *PlanPayload
+	Decision       *DecisionPayload
+	DecisionAction *DecisionActionPayload
+	Elapsed        time.Duration
 }
 
 // transition returns the next state given the current state and cycle context.
@@ -146,6 +147,10 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 	if cfg.Broker != nil {
 		pendingApprovals = len(cfg.Broker.Pending())
 	}
+	pendingClarifications := 0
+	if cfg.Clarifier != nil {
+		pendingClarifications = len(cfg.Clarifier.Pending())
+	}
 
 	lastErr := ""
 	if cc.lastError != nil {
@@ -178,29 +183,30 @@ func publishStatus(cfg Config, cc *cycleContext, start time.Time) {
 	}
 
 	cfg.Status.Update(CycleStatus{
-		CycleID:           cc.cycleID,
-		State:             cc.state,
-		Phase:             statusPhase,
-		Pass:              statusPass,
-		StartedAt:         start,
-		Elapsed:           time.Since(start),
-		CurrentSubtask:    cc.currentSubtask,
-		TotalSubtasks:     len(subtasks),
-		CompletedSubtasks: completed,
-		Subtasks:          subtasks,
-		RevisionCount:     cc.revisionCount,
-		MaxRevisions:      maxRevisions,
-		RetryCount:        cc.retryCount,
-		PendingApprovals:  pendingApprovals,
-		LastError:         lastErr,
-		TaskType:          taskType,
-		Intent:            intent,
-		TranscriptLen:     cc.transcript.Len(),
-		LastTranscript:    tx,
-		CurrentReview:     tx.Review,
-		CurrentBoard:      board,
-		RecentTimeline:    timeline,
-		RecentTimelineCap: statusRecentTimelineCap,
+		CycleID:               cc.cycleID,
+		State:                 cc.state,
+		Phase:                 statusPhase,
+		Pass:                  statusPass,
+		StartedAt:             start,
+		Elapsed:               time.Since(start),
+		CurrentSubtask:        cc.currentSubtask,
+		TotalSubtasks:         len(subtasks),
+		CompletedSubtasks:     completed,
+		Subtasks:              subtasks,
+		RevisionCount:         cc.revisionCount,
+		MaxRevisions:          maxRevisions,
+		RetryCount:            cc.retryCount,
+		PendingApprovals:      pendingApprovals,
+		PendingClarifications: pendingClarifications,
+		LastError:             lastErr,
+		TaskType:              taskType,
+		Intent:                intent,
+		TranscriptLen:         cc.transcript.Len(),
+		LastTranscript:        tx,
+		CurrentReview:         tx.Review,
+		CurrentBoard:          board,
+		RecentTimeline:        timeline,
+		RecentTimelineCap:     statusRecentTimelineCap,
 	})
 }
 

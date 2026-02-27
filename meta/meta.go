@@ -46,11 +46,14 @@ type DelegateResult struct {
 
 // CycleResult holds a summarized outcome from the cycle state machine.
 type CycleResult struct {
-	CycleID        string
-	FinalState     string
-	Recommendation string
-	Elapsed        time.Duration
-	Error          string
+	CycleID               string
+	FinalState            string
+	Recommendation        string
+	DecisionAction        string
+	DecisionActionSummary string
+	DecisionActionError   string
+	Elapsed               time.Duration
+	Error                 string
 }
 
 // Config holds the configuration for a meta session.
@@ -171,7 +174,7 @@ func Start(ctx context.Context, cfg Config) error {
 		} else {
 			fmt.Println("[cycle] Requested turn: latest cycle turn")
 		}
-		fmt.Println("[cycle] Use /status for progress, /approve|/deny for approvals, and /clarify for clarification tickets.")
+		printCycleRunningCommandHint()
 	}
 
 	consumeCycleResult := func(cr cycleResult) {
@@ -252,7 +255,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "status":
 			if !cfg.CycleEnabled {
-				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				printCycleModeDisabledHint()
 				continue
 			}
 			if !cycleRunning {
@@ -264,7 +267,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "board":
 			if !cfg.CycleEnabled {
-				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				printCycleModeDisabledHint()
 				continue
 			}
 			if !cycleRunning {
@@ -276,7 +279,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "timeline":
 			if !cfg.CycleEnabled {
-				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				printCycleModeDisabledHint()
 				continue
 			}
 			if !cycleRunning {
@@ -297,7 +300,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "live":
 			if !cfg.CycleEnabled {
-				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				printCycleModeDisabledHint()
 				continue
 			}
 			modeArg := strings.TrimSpace(arg)
@@ -324,7 +327,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "resume":
 			if !cfg.CycleEnabled {
-				fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+				printCycleModeDisabledHint()
 				continue
 			}
 			if cycleRunning {
@@ -349,12 +352,12 @@ func Start(ctx context.Context, cfg Config) error {
 			} else {
 				fmt.Println("[cycle] Requested turn: latest cycle turn")
 			}
-			fmt.Println("[cycle] Use /status for progress, /approve|/deny for approvals, and /clarify for clarification tickets.")
+			printCycleRunningCommandHint()
 			continue
 
 		case "clarify":
 			if !cfg.CycleEnabled || clarifier == nil {
-				fmt.Println("Cycle mode not enabled.")
+				printCycleModeDisabledHint()
 				continue
 			}
 			arg = strings.TrimSpace(arg)
@@ -362,6 +365,7 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Println("Usage: /clarify [ticket-id] <answer>")
 				continue
 			}
+			pending := clarifier.Pending()
 			ticketID, answer, err := parseClarifyArg(arg)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -369,12 +373,15 @@ func Start(ctx context.Context, cfg Config) error {
 				continue
 			}
 			if ticketID == "" {
-				pending := clarifier.Pending()
-				if len(pending) == 0 {
-					fmt.Println("No pending clarifications.")
+				ticketID, err = resolveClarificationTicket("", pending)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					if len(pending) > 1 {
+						printPendingClarifications(clarifier)
+						fmt.Println("Usage: /clarify <ticket-id> <answer>")
+					}
 					continue
 				}
-				ticketID = pending[0].TicketID
 			}
 			if err := clarifier.Resolve(ticketID, answer); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -385,18 +392,18 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "approve":
 			if !cfg.CycleEnabled || broker == nil {
-				fmt.Println("Cycle mode not enabled.")
+				printCycleModeDisabledHint()
 				continue
 			}
-			ticketID := strings.TrimSpace(arg)
-			if ticketID == "" {
-				// Auto-approve the first pending ticket.
-				pending := broker.Pending()
-				if len(pending) == 0 {
-					fmt.Println("No pending approvals.")
-					continue
+			pending := broker.Pending()
+			ticketID, err := resolveApprovalTicket(strings.TrimSpace(arg), pending)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				if len(pending) > 1 {
+					printPendingApprovals(broker)
+					fmt.Println("Usage: /approve <ticket-id>")
 				}
-				ticketID = pending[0].TicketID
+				continue
 			}
 			if err := broker.Resolve(ticketID, true, ""); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -407,17 +414,18 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "deny":
 			if !cfg.CycleEnabled || broker == nil {
-				fmt.Println("Cycle mode not enabled.")
+				printCycleModeDisabledHint()
 				continue
 			}
-			ticketID := strings.TrimSpace(arg)
-			if ticketID == "" {
-				pending := broker.Pending()
-				if len(pending) == 0 {
-					fmt.Println("No pending approvals.")
-					continue
+			pending := broker.Pending()
+			ticketID, err := resolveApprovalTicket(strings.TrimSpace(arg), pending)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				if len(pending) > 1 {
+					printPendingApprovals(broker)
+					fmt.Println("Usage: /deny <ticket-id>")
 				}
-				ticketID = pending[0].TicketID
+				continue
 			}
 			if err := broker.Resolve(ticketID, false, ""); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -428,7 +436,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 		case "stop":
 			if !cfg.CycleEnabled {
-				fmt.Println("Cycle mode not enabled.")
+				printCycleModeDisabledHint()
 				continue
 			}
 			if !cycleRunning {
@@ -487,7 +495,8 @@ func Start(ctx context.Context, cfg Config) error {
 				case cr := <-cycleDone:
 					consumeCycleResult(cr)
 				default:
-					fmt.Println("A cycle is currently running. Use /status, /approve, /deny, or /stop.")
+					fmt.Println("A cycle is currently running.")
+					printCycleRunningCommandHint()
 					continue
 				}
 			}
@@ -499,7 +508,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 				cyclePrompt = input
 				fmt.Printf("[cycle] Started for: %q\n", truncate(input, 60))
-				fmt.Println("[cycle] Use /status for progress, /approve|/deny for approvals, and /clarify for clarification tickets.")
+				printCycleRunningCommandHint()
 				continue
 			}
 
@@ -676,6 +685,34 @@ func parseClarifyArg(arg string) (ticketID, answer string, err error) {
 	}
 
 	return "", arg, nil
+}
+
+func resolveApprovalTicket(ticketID string, pending []*cycle.PendingApproval) (string, error) {
+	if ticketID != "" {
+		return ticketID, nil
+	}
+	switch len(pending) {
+	case 0:
+		return "", fmt.Errorf("no pending approvals")
+	case 1:
+		return pending[0].TicketID, nil
+	default:
+		return "", fmt.Errorf("multiple pending approvals; specify ticket id")
+	}
+}
+
+func resolveClarificationTicket(ticketID string, pending []*cycle.PendingClarification) (string, error) {
+	if ticketID != "" {
+		return ticketID, nil
+	}
+	switch len(pending) {
+	case 0:
+		return "", fmt.Errorf("no pending clarifications")
+	case 1:
+		return pending[0].TicketID, nil
+	default:
+		return "", fmt.Errorf("multiple pending clarifications; specify ticket id")
+	}
 }
 
 // parseDelegateArg parses "/delegate [agent] <prompt>".
@@ -1015,7 +1052,12 @@ func saveMetaSession(cfg Config, adapterNames, agentNames []string, turns []Turn
 			st.CycleID = t.Cycle.CycleID
 			st.CycleState = t.Cycle.FinalState
 			st.FinalText = t.Cycle.Recommendation
+			st.DecisionAction = t.Cycle.DecisionAction
+			st.DecisionActionSummary = t.Cycle.DecisionActionSummary
 			st.Error = t.Cycle.Error
+			if st.Error == "" {
+				st.Error = t.Cycle.DecisionActionError
+			}
 		}
 		storeTurns[i] = st
 	}
@@ -1056,11 +1098,26 @@ func handleCycleResult(result *cycle.Result, err error) *CycleResult {
 		recommendation = result.Decision.Recommendation
 		fmt.Println(recommendation)
 	}
+	decisionAction := ""
+	decisionActionSummary := ""
+	decisionActionErr := ""
+	if result.DecisionAction != nil {
+		decisionAction = result.DecisionAction.Action
+		if result.DecisionAction.Summary != "" {
+			decisionActionSummary = result.DecisionAction.Summary
+		}
+		if result.DecisionAction.Error != "" {
+			decisionActionErr = result.DecisionAction.Error
+		}
+	}
 	return &CycleResult{
-		CycleID:        result.CycleID,
-		FinalState:     string(result.FinalState),
-		Recommendation: recommendation,
-		Elapsed:        result.Elapsed,
+		CycleID:               result.CycleID,
+		FinalState:            string(result.FinalState),
+		Recommendation:        recommendation,
+		DecisionAction:        decisionAction,
+		DecisionActionSummary: decisionActionSummary,
+		DecisionActionError:   decisionActionErr,
+		Elapsed:               result.Elapsed,
 	}
 }
 
@@ -1076,6 +1133,14 @@ func printHelp() {
 	fmt.Println()
 }
 
+func printCycleModeDisabledHint() {
+	fmt.Println("Cycle mode not enabled. Use --cycle flag.")
+}
+
+func printCycleRunningCommandHint() {
+	fmt.Println("[cycle] Commands: /status, /board, /timeline [count], /live [mode], /approve [ticket], /deny [ticket], /clarify [ticket] <answer>, /stop, /help")
+}
+
 func printCycleHelp() {
 	fmt.Println("Cycle commands:")
 	fmt.Println("  /status                    Show current cycle state")
@@ -1084,8 +1149,8 @@ func printCycleHelp() {
 	fmt.Println("  /live [mode]               Set live updates: off|compact|verbose")
 	fmt.Println("  /resume [turn]             Resume a prior cycle from this run directory")
 	fmt.Println("  /clarify [ticket] <answer> Provide clarification response for cycle")
-	fmt.Println("  /approve [ticket-id]       Approve pending approval")
-	fmt.Println("  /deny [ticket-id]          Deny pending approval")
+	fmt.Println("  /approve [ticket-id]       Approve pending approval (auto-selects only when exactly one is pending)")
+	fmt.Println("  /deny [ticket-id]          Deny pending approval (auto-selects only when exactly one is pending)")
 	fmt.Println("  /stop                      Cancel running cycle")
 	fmt.Println()
 }
@@ -1126,6 +1191,7 @@ func printCycleStatus(sp *cycle.StatusProvider, broker *cycle.ApprovalBroker, cl
 	fmt.Printf("  Cycle: %s\n", snap.CycleID)
 	fmt.Printf("  State: %s (phase: %s)\n", snap.State, snap.Phase)
 	fmt.Printf("  Elapsed: %.1fs\n", snap.Elapsed.Seconds())
+	fmt.Printf("  Pending: approvals=%d clarifications=%d\n", snap.PendingApprovals, snap.PendingClarifications)
 
 	if snap.TaskType != "" {
 		fmt.Printf("  Task type: %s\n", snap.TaskType)
@@ -1183,6 +1249,9 @@ func printCycleStatus(sp *cycle.StatusProvider, broker *cycle.ApprovalBroker, cl
 	}
 	if clarifier != nil {
 		printPendingClarifications(clarifier)
+	}
+	if snap.PendingApprovals > 0 || snap.PendingClarifications > 0 {
+		fmt.Println("  Operator actions: /approve [ticket], /deny [ticket], /clarify [ticket] <answer>")
 	}
 
 	fmt.Println(separator)

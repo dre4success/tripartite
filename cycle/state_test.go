@@ -37,7 +37,7 @@ func TestTransitionTable(t *testing.T) {
 			cc.intent = &IntentPayload{TaskType: TaskCodeChange}
 			cc.plan = &PlanPayload{Permissions: "read"}
 		}, expected: StateAwaitClarification},
-		{name: "PLAN_REVIEW→EXECUTE_ambiguous_plan_without_clarifier", state: StatePlanReview, setup: func(cc *cycleContext) {
+		{name: "PLAN_REVIEW_transition_falls_through_without_clarifier", state: StatePlanReview, setup: func(cc *cycleContext) {
 			cc.intent = &IntentPayload{TaskType: TaskCodeChange}
 			cc.plan = &PlanPayload{Permissions: "read"}
 		}, expected: StateExecute},
@@ -229,6 +229,22 @@ func TestConditionCheckers(t *testing.T) {
 		}
 		if cc.needsClarification() {
 			t.Fatal("did not expect clarification when plan has concrete subtasks")
+		}
+
+		cc.transcript.Append(KindReviewFinding, "reviewer", StatePlanReview, phaseName(StatePlanReview), 1, ReviewFindingPayload{
+			Reviewer:              "reviewer",
+			Severity:              SeverityWarn,
+			Target:                "clarification",
+			Summary:               "needs additional operator decision",
+			NeedsClarification:    true,
+			ClarificationQuestion: "Should we include backward compatibility for v1 clients?",
+		})
+		q, ok := cc.clarificationCandidate()
+		if !ok {
+			t.Fatal("expected clarificationCandidate from structured review finding")
+		}
+		if q != "Should we include backward compatibility for v1 clients?" {
+			t.Fatalf("question = %q, want %q", q, "Should we include backward compatibility for v1 clients?")
 		}
 	})
 }

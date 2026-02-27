@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -106,6 +107,9 @@ func (b *ClarificationBroker) Pending() []*PendingClarification {
 			out = append(out, pc)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].TicketID < out[j].TicketID
+	})
 	return out
 }
 
