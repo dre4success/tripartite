@@ -55,6 +55,7 @@ func runMeta(prompt *string, args []string) {
 	agentList := fs.String("agents", "claude", "Agents for delegate (comma-separated)")
 	defaultAgent := fs.String("default-agent", "claude", "Default delegate agent")
 	sandbox := fs.String("sandbox", "safe", "Delegate sandbox: safe|write|full")
+	uiMode := fs.String("ui", "text", "UI mode: text|dashboard")
 	worktreeEnabled := fs.Bool("worktree", false, "Run meta-session delegate turns in isolated git worktrees")
 	cycleEnabled := fs.Bool("cycle", true, "Enable task cycle state machine (default: true)")
 	cycleLive := fs.String("cycle-live", "compact", "Cycle live updates: off|compact|verbose")
@@ -110,6 +111,12 @@ func runMeta(prompt *string, args []string) {
 	cycleLiveMode, err := meta.ParseLiveCycleVerbosity(*cycleLive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	switch strings.ToLower(strings.TrimSpace(*uiMode)) {
+	case "text", "dashboard":
+	default:
+		fmt.Fprintln(os.Stderr, "Error: --ui must be text|dashboard")
 		os.Exit(1)
 	}
 
@@ -220,6 +227,7 @@ func runMeta(prompt *string, args []string) {
 		CycleLive:    cycleLiveMode,
 		ResumeCycle:  resumePath != "",
 		ResumeTurn:   *resumeTurn,
+		UIMode:       strings.ToLower(strings.TrimSpace(*uiMode)),
 	}
 	if resumeSessionPath != "" {
 		state, err := s.LoadMetaSessionState()

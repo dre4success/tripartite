@@ -79,6 +79,7 @@ type Config struct {
 	ResumeTurn    int
 	InitialTurns  []Turn
 	AgentSessions map[string]string
+	UIMode        string
 }
 
 type pendingDelegateDecision struct {
@@ -87,9 +88,17 @@ type pendingDelegateDecision struct {
 	Branch    string
 }
 
+type pendingDelegateLaunch struct {
+	Prompt string
+	Route  router.Result
+}
+
 const (
 	delegateDecisionActionApplyFF = "apply_worktree_branch_ff"
 	delegateDecisionActionKeep    = "keep_proposal"
+	delegateLaunchApprovalScope   = "delegate_launch"
+	maxSessionMemoryTurns         = 8
+	maxSessionMemoryChars         = 1800
 )
 
 // Start launches the interactive meta session REPL.
@@ -102,29 +111,37 @@ func Start(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	adapterNames := make([]string, len(cfg.Adapters))
+	readyAdapterNames := make([]string, len(cfg.Adapters))
 	for i, a := range cfg.Adapters {
-		adapterNames[i] = a.Name()
+		readyAdapterNames[i] = a.Name()
 	}
-	agentNames := make([]string, len(cfg.Agents))
+	readyAgentNames := make([]string, len(cfg.Agents))
 	for i, a := range cfg.Agents {
-		agentNames[i] = a.Name()
+		readyAgentNames[i] = a.Name()
 	}
 	effectiveCycleLive := cfg.CycleLive
 	if effectiveCycleLive == "" {
 		effectiveCycleLive = LiveCycleCompact
 	}
+	uiMode := strings.ToLower(strings.TrimSpace(cfg.UIMode))
+	if uiMode == "" {
+		uiMode = "text"
+	}
+	if uiMode != "text" && uiMode != "dashboard" {
+		uiMode = "text"
+	}
 
 	fmt.Println("Tripartite meta session")
-	fmt.Printf("Adapters: %s\n", strings.Join(adapterNames, ", "))
-	fmt.Printf("Agents: %s\n", strings.Join(agentNames, ", "))
+	fmt.Printf("Adapters: %s\n", strings.Join(readyAdapterNames, ", "))
+	fmt.Printf("Agents: %s\n", strings.Join(readyAgentNames, ", "))
 	if cfg.CycleEnabled {
 		fmt.Println("Mode: cycle state machine (default runtime)")
 		fmt.Printf("Live updates: %s\n", effectiveCycleLive)
-		fmt.Println("Commands: /status, /board, /timeline, /live, /resume, /clarify, /approve, /deny, /stop, /history, /help, /quit")
+		fmt.Println("Commands: /status, /board, /timeline, /dashboard, /live, /resume, /clarify, /approve, /deny, /stop, /history, /help, /quit")
 	} else {
-		fmt.Println("Commands: /status, /approve, /deny, /brainstorm, /delegate, /history, /help, /quit")
+		fmt.Println("Commands: /status, /dashboard, /approve, /deny, /brainstorm, /delegate, /history, /help, /quit")
 	}
+	fmt.Printf("UI: %s\n", uiMode)
 	fmt.Println()
 
 	// Shared approval/clarification brokers and status provider for cycle ↔ REPL coordination.
@@ -137,6 +154,7 @@ func Start(ctx context.Context, cfg Config) error {
 		statusProvider = cycle.NewStatusProvider()
 	}
 	delegateDecisions := make(map[string]pendingDelegateDecision)
+	delegateLaunches := make(map[string]pendingDelegateLaunch)
 
 	// Channels for async cycle results.
 	type cycleResult struct {
@@ -224,6 +242,10 @@ func Start(ctx context.Context, cfg Config) error {
 		cycleCancel = nil
 	}
 
+	if uiMode == "dashboard" {
+		printUnifiedDashboard(statusProvider, broker, clarifier, turns, cycleRunning)
+	}
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		pTotal, pPerm, pDec := approvalCounts(broker)
@@ -254,6 +276,9 @@ func Start(ctx context.Context, cfg Config) error {
 				default:
 				}
 			}
+			if uiMode == "dashboard" {
+				printUnifiedDashboard(statusProvider, broker, clarifier, turns, cycleRunning)
+			}
 			continue
 		}
 
@@ -266,7 +291,7 @@ func Start(ctx context.Context, cfg Config) error {
 				cycleCancel()
 			}
 			fmt.Println("Ending session.")
-			return saveMetaSession(cfg, adapterNames, agentNames, turns, agentSessions)
+			return saveMetaSession(cfg, readyAdapterNames, readyAgentNames, turns, agentSessions)
 
 		case "history":
 			fmt.Printf("Session has %d turn(s).\n", len(turns))
@@ -310,6 +335,10 @@ func Start(ctx context.Context, cfg Config) error {
 				continue
 			}
 			printCycleBoard(statusProvider)
+			continue
+
+		case "dashboard":
+			printUnifiedDashboard(statusProvider, broker, clarifier, turns, cycleRunning)
 			continue
 
 		case "timeline":
@@ -444,6 +473,24 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			} else {
 				fmt.Printf("Approved: %s\n", ticketID)
+				if launch, ok := delegateLaunches[ticketID]; ok {
+					runCfg := cfg
+					runCfg.AgentSessions = agentSessions
+					turn, runErr := dispatch(ctx, runCfg, launch.Prompt, turns, len(turns)+1, launch.Route)
+					delete(delegateLaunches, ticketID)
+					if runErr != nil {
+						fmt.Fprintf(os.Stderr, "[control-plane] delegate launch failed: %v\n", runErr)
+						checkpointMetaSessionState(cfg, turns, agentSessions)
+						continue
+					}
+					turns = append(turns, *turn)
+					updateAgentSession(agentSessions, turn)
+					if newTicketID, pd, ok := queueDelegateDecisionTicket(broker, turns[len(turns)-1], len(turns)-1); ok {
+						delegateDecisions[newTicketID] = pd
+					}
+					checkpointMetaSessionState(cfg, turns, agentSessions)
+					continue
+				}
 				if d, ok := delegateDecisions[ticketID]; ok {
 					action, summary, actionErr := applyDelegateDecision(ctx, true, d)
 					turns[d.TurnIndex].Delegate.DecisionAction = action
@@ -479,6 +526,12 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			} else {
 				fmt.Printf("Denied: %s\n", ticketID)
+				if _, ok := delegateLaunches[ticketID]; ok {
+					delete(delegateLaunches, ticketID)
+					fmt.Println("[control-plane] delegate launch denied; request kept pending in history only.")
+					checkpointMetaSessionState(cfg, turns, agentSessions)
+					continue
+				}
 				if d, ok := delegateDecisions[ticketID]; ok {
 					action, summary, actionErr := applyDelegateDecision(ctx, false, d)
 					turns[d.TurnIndex].Delegate.DecisionAction = action
@@ -544,9 +597,38 @@ func Start(ctx context.Context, cfg Config) error {
 				fmt.Println("Usage: /delegate [agent] <prompt>")
 				continue
 			}
+			route := router.Result{
+				Intent: router.IntentDelegate,
+				Agent:  agentName,
+				Reason: "forced via slash command",
+			}
+			if route.Agent == "" {
+				route.Agent = cfg.DefaultAgent
+			}
+			if !explicitAgent {
+				if selected, changed := pickAvailableAgent(route.Agent, cfg.DefaultAgent, agentNames(cfg.Agents)); selected != "" {
+					route.Agent = selected
+					if changed {
+						route.Reason += fmt.Sprintf("; selected available agent %q", selected)
+					}
+				}
+			}
+			if explicitAgent && route.Agent != "" {
+				route.Reason += fmt.Sprintf("; explicit agent %q", route.Agent)
+			}
+
+			if requiresDelegateLaunchApproval(cfg.Sandbox) {
+				ticketID, launch := requestDelegateLaunchApproval(broker, prompt, route, cfg.Sandbox)
+				if ticketID != "" {
+					delegateLaunches[ticketID] = launch
+				}
+				checkpointMetaSessionState(cfg, turns, agentSessions)
+				continue
+			}
+
 			runCfg := cfg
 			runCfg.AgentSessions = agentSessions
-			turn, err := runOnceForced(ctx, runCfg, prompt, turns, len(turns)+1, router.IntentDelegate, agentName, explicitAgent)
+			turn, err := dispatch(ctx, runCfg, prompt, turns, len(turns)+1, route)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				continue
@@ -584,9 +666,20 @@ func Start(ctx context.Context, cfg Config) error {
 			}
 
 			// Legacy path — route automatically.
+			route := router.Classify(input, router.Config{DefaultAgent: cfg.DefaultAgent})
+			route = adjustRouteForAvailability(route, cfg.DefaultAgent, adapterNames(cfg.Adapters), agentNames(cfg.Agents))
+			if route.Intent == router.IntentDelegate && requiresDelegateLaunchApproval(cfg.Sandbox) {
+				ticketID, launch := requestDelegateLaunchApproval(broker, input, route, cfg.Sandbox)
+				if ticketID != "" {
+					delegateLaunches[ticketID] = launch
+				}
+				checkpointMetaSessionState(cfg, turns, agentSessions)
+				continue
+			}
+
 			runCfg := cfg
 			runCfg.AgentSessions = agentSessions
-			turn, err := RunOnce(ctx, runCfg, input, turns, len(turns)+1)
+			turn, err := dispatch(ctx, runCfg, input, turns, len(turns)+1, route)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				fmt.Println("(You can try another prompt or /quit)")
@@ -613,7 +706,7 @@ func Start(ctx context.Context, cfg Config) error {
 	}
 
 	fmt.Println("\nEnd of input. Ending session.")
-	return saveMetaSession(cfg, adapterNames, agentNames, turns, agentSessions)
+	return saveMetaSession(cfg, readyAdapterNames, readyAgentNames, turns, agentSessions)
 }
 
 // RunOnceCycle processes a single prompt through the cycle state machine.
@@ -710,7 +803,7 @@ func dispatch(ctx context.Context, cfg Config, prompt string, history []Turn, tu
 
 	case router.IntentDelegate:
 		printRoute("delegate", route, prompt)
-		result, err := runDelegate(ctx, cfg, prompt, route.Agent, turnNum)
+		result, err := runDelegate(ctx, cfg, prompt, route.Agent, turnNum, history)
 		if err != nil {
 			return nil, err
 		}
@@ -804,6 +897,153 @@ func updateAgentSession(agentSessions map[string]string, turn *Turn) {
 	}
 }
 
+func requiresDelegateLaunchApproval(sandbox string) bool {
+	switch strings.ToLower(strings.TrimSpace(sandbox)) {
+	case "write", "full":
+		return true
+	default:
+		return false
+	}
+}
+
+func buildDelegatePrompt(prompt string, history []Turn, sessionID string, a agent.Agent) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return prompt
+	}
+	// If the provider supports native continuation and we have a session ID,
+	// let the provider runtime own continuity.
+	if strings.TrimSpace(sessionID) != "" && len(a.ContinuationArgs(sessionID)) > 0 {
+		return prompt
+	}
+
+	mem := buildSessionMemorySnippet(history, maxSessionMemoryTurns, maxSessionMemoryChars)
+	if mem == "" {
+		return prompt
+	}
+	return strings.TrimSpace(
+		"Session context (recent turns, summarized):\n" +
+			mem +
+			"\n\nCurrent task:\n" +
+			prompt,
+	)
+}
+
+func buildSessionMemorySnippet(history []Turn, maxTurns, maxChars int) string {
+	if maxTurns <= 0 || maxChars <= 0 || len(history) == 0 {
+		return ""
+	}
+	start := 0
+	if len(history) > maxTurns {
+		start = len(history) - maxTurns
+	}
+
+	var lines []string
+	for i := start; i < len(history); i++ {
+		t := history[i]
+		summary := summarizeTurnForMemory(t)
+		if summary == "" {
+			continue
+		}
+		line := fmt.Sprintf("- T%d: %s", i+1, summary)
+		lines = append(lines, truncate(line, 220))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	out := strings.Join(lines, "\n")
+	if len(out) <= maxChars {
+		return out
+	}
+	return truncate(out, maxChars)
+}
+
+func summarizeTurnForMemory(t Turn) string {
+	if t.Cycle != nil {
+		base := strings.TrimSpace(t.Cycle.Recommendation)
+		if base == "" {
+			base = strings.TrimSpace(t.Cycle.Error)
+		}
+		if base == "" {
+			base = "cycle completed"
+		}
+		return "cycle: " + firstLine(base)
+	}
+	if t.Delegate != nil {
+		base := strings.TrimSpace(t.Delegate.FinalText)
+		if base == "" {
+			base = strings.TrimSpace(t.Delegate.DecisionActionSummary)
+		}
+		if base == "" {
+			base = "delegate run completed"
+		}
+		return fmt.Sprintf("delegate(%s): %s", t.Delegate.Agent, firstLine(base))
+	}
+	if t.Brainstorm != nil {
+		// Prefer synthesis round content when available.
+		var base string
+		rounds := t.Brainstorm.Rounds
+		if len(rounds) > 0 {
+			last := rounds[len(rounds)-1]
+			for _, r := range last {
+				if strings.TrimSpace(r.Content) != "" {
+					base = strings.TrimSpace(r.Content)
+					break
+				}
+			}
+		}
+		if base == "" {
+			base = "brainstorm turn completed"
+		}
+		return "brainstorm: " + firstLine(base)
+	}
+	return firstLine(t.Prompt)
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func requestDelegateLaunchApproval(
+	broker *cycle.ApprovalBroker,
+	prompt string,
+	route router.Result,
+	sandbox string,
+) (string, pendingDelegateLaunch) {
+	if broker == nil {
+		return "", pendingDelegateLaunch{}
+	}
+	agentName := route.Agent
+	if strings.TrimSpace(agentName) == "" {
+		agentName = "delegate-agent"
+	}
+	reason := fmt.Sprintf(
+		"Delegate launch requires operator approval: agent=%s sandbox=%s prompt=%q",
+		agentName,
+		sandbox,
+		truncate(prompt, 80),
+	)
+	pa := broker.Request(reason, delegateLaunchApprovalScope, cycle.StateExecute)
+	fmt.Printf("[control-plane] Permission ticket created: %s\n", pa.TicketID)
+	fmt.Printf("  Reason: %s\n", pa.Reason)
+	fmt.Printf("  Use /approve %s or /deny %s\n", pa.TicketID, pa.TicketID)
+	return pa.TicketID, pendingDelegateLaunch{
+		Prompt: prompt,
+		Route:  route,
+	}
+}
+
 func queueDelegateDecisionTicket(broker *cycle.ApprovalBroker, turn Turn, turnIndex int) (string, pendingDelegateDecision, bool) {
 	if broker == nil || turn.Delegate == nil {
 		return "", pendingDelegateDecision{}, false
@@ -888,7 +1128,7 @@ func runBrainstorm(ctx context.Context, cfg Config, prompt string, history []Tur
 	return &BrainstormResult{Rounds: allRounds}, nil
 }
 
-func runDelegate(ctx context.Context, cfg Config, prompt string, agentName string, turnNum int) (*DelegateResult, error) {
+func runDelegate(ctx context.Context, cfg Config, prompt string, agentName string, turnNum int, history []Turn) (*DelegateResult, error) {
 	var a agent.Agent
 	for _, ag := range cfg.Agents {
 		if ag.Name() == agentName {
@@ -902,6 +1142,7 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 
 	resolvedModel := agent.ResolveModel(a.Name(), a.DefaultModel())
 	sessionID := strings.TrimSpace(cfg.AgentSessions[a.Name()])
+	effectivePrompt := buildDelegatePrompt(prompt, history, sessionID, a)
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -953,7 +1194,7 @@ func runDelegate(ctx context.Context, cfg Config, prompt string, agentName strin
 	eventCount := 0
 	latestSessionID := sessionID
 
-	runErr := stream.Run(ctx, a, prompt, agent.StreamOpts{
+	runErr := stream.Run(ctx, a, effectivePrompt, agent.StreamOpts{
 		Model:     resolvedModel,
 		Sandbox:   cfg.Sandbox,
 		Cwd:       runCwd,
@@ -1352,6 +1593,7 @@ func handleCycleResult(result *cycle.Result, err error) *CycleResult {
 func printHelp() {
 	fmt.Println("Meta session commands:")
 	fmt.Println("  /status                    Show control-plane pending tickets")
+	fmt.Println("  /dashboard                 Show unified collaboration dashboard")
 	fmt.Println("  /approve [ticket-id]       Approve pending ticket")
 	fmt.Println("  /deny [ticket-id]          Deny pending ticket")
 	fmt.Println("  /brainstorm <prompt>       Force multi-agent brainstorm")
@@ -1376,6 +1618,7 @@ func printCycleHelp() {
 	fmt.Println("Cycle commands:")
 	fmt.Println("  /status                    Show current cycle state")
 	fmt.Println("  /board                     Show current transcript-backed phase board")
+	fmt.Println("  /dashboard                 Show unified cycle + control-plane dashboard")
 	fmt.Println("  /timeline [count]          Show recent transcript-backed collaboration events")
 	fmt.Println("  /live [mode]               Set live updates: off|compact|verbose")
 	fmt.Println("  /resume [turn]             Resume a prior cycle from this run directory")
@@ -1411,6 +1654,55 @@ func printControlPlaneStatus(broker *cycle.ApprovalBroker, clarifier *cycle.Clar
 	}
 	if pendingApprovals == 0 && pendingClarifications == 0 {
 		fmt.Println("  No pending operator actions.")
+	}
+	fmt.Println(separator)
+}
+
+func printUnifiedDashboard(sp *cycle.StatusProvider, broker *cycle.ApprovalBroker, clarifier *cycle.ClarificationBroker, turns []Turn, cycleRunning bool) {
+	separator := strings.Repeat("=", 72)
+	fmt.Println(separator)
+	fmt.Println("TRIPARTITE DASHBOARD")
+	fmt.Println(separator)
+
+	printControlPlaneStatus(broker, clarifier, cycleRunning)
+
+	if cycleRunning && sp != nil {
+		fmt.Println()
+		printCycleStatus(sp, broker, clarifier)
+		fmt.Println()
+	}
+
+	const maxTurns = 6
+	if len(turns) > 0 {
+		fmt.Println("Recent Turns:")
+		start := 0
+		if len(turns) > maxTurns {
+			start = len(turns) - maxTurns
+		}
+		for i := start; i < len(turns); i++ {
+			t := turns[i]
+			engine := "brainstorm"
+			detail := ""
+			if t.Delegate != nil {
+				engine = "delegate"
+				detail = t.Delegate.Agent
+				if t.Delegate.DecisionAction != "" {
+					detail += " [" + t.Delegate.DecisionAction + "]"
+				}
+			} else if t.Cycle != nil {
+				engine = "cycle"
+				detail = t.Cycle.FinalState
+				if t.Cycle.DecisionAction != "" {
+					detail += " [" + t.Cycle.DecisionAction + "]"
+				}
+			}
+			if detail != "" {
+				engine += " → " + detail
+			}
+			fmt.Printf("  T%d [%s] %s\n", i+1, engine, truncate(t.Prompt, 80))
+		}
+	} else {
+		fmt.Println("Recent Turns: none")
 	}
 	fmt.Println(separator)
 }

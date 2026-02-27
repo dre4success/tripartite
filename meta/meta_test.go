@@ -3,12 +3,14 @@ package meta
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/dre4success/tripartite/adapter"
+	"github.com/dre4success/tripartite/agent"
 	"github.com/dre4success/tripartite/cycle"
 	"github.com/dre4success/tripartite/orchestrator"
 	"github.com/dre4success/tripartite/router"
@@ -605,6 +607,90 @@ func TestApplyDelegateDecision(t *testing.T) {
 		}
 	})
 }
+
+func TestRequiresDelegateLaunchApproval(t *testing.T) {
+	tests := []struct {
+		sandbox string
+		want    bool
+	}{
+		{sandbox: "safe", want: false},
+		{sandbox: "write", want: true},
+		{sandbox: "full", want: true},
+		{sandbox: "WRITE", want: true},
+	}
+	for _, tt := range tests {
+		if got := requiresDelegateLaunchApproval(tt.sandbox); got != tt.want {
+			t.Fatalf("requiresDelegateLaunchApproval(%q) = %v, want %v", tt.sandbox, got, tt.want)
+		}
+	}
+}
+
+func TestRequestDelegateLaunchApproval(t *testing.T) {
+	broker := cycle.NewApprovalBroker()
+	route := router.Result{Intent: router.IntentDelegate, Agent: "claude", Reason: "forced"}
+	ticketID, launch := requestDelegateLaunchApproval(broker, "fix auth bug", route, "write")
+	if ticketID == "" {
+		t.Fatal("expected ticket id")
+	}
+	if launch.Route.Agent != "claude" {
+		t.Fatalf("launch route agent = %q, want %q", launch.Route.Agent, "claude")
+	}
+	pending := broker.Pending()
+	if len(pending) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(pending))
+	}
+	if pending[0].Kind != cycle.ApprovalKindPermission {
+		t.Fatalf("approval kind = %q, want %q", pending[0].Kind, cycle.ApprovalKindPermission)
+	}
+}
+
+func TestBuildSessionMemorySnippet(t *testing.T) {
+	history := []Turn{
+		{Prompt: "p1", Brainstorm: &BrainstormResult{Rounds: [][]adapter.Response{{{Model: "claude", Content: "brainstorm summary"}}}}},
+		{Prompt: "p2", Delegate: &DelegateResult{Agent: "claude", FinalText: "implemented change"}},
+		{Prompt: "p3", Cycle: &CycleResult{Recommendation: "ship this", FinalState: "DONE"}},
+	}
+	got := buildSessionMemorySnippet(history, 3, 500)
+	if !strings.Contains(got, "brainstorm:") || !strings.Contains(got, "delegate(claude):") || !strings.Contains(got, "cycle:") {
+		t.Fatalf("memory snippet missing expected summaries:\n%s", got)
+	}
+}
+
+func TestBuildDelegatePrompt(t *testing.T) {
+	history := []Turn{
+		{
+			Prompt:   "do X",
+			Delegate: &DelegateResult{Agent: "claude", FinalText: "implemented X"},
+		},
+	}
+	a := &agentStub{name: "stub", continuation: nil}
+	got := buildDelegatePrompt("now do Y", history, "", a)
+	if !strings.Contains(got, "Session context") || !strings.Contains(got, "Current task:") || !strings.Contains(got, "now do Y") {
+		t.Fatalf("unexpected delegate prompt:\n%s", got)
+	}
+
+	aNative := &agentStub{name: "native", continuation: []string{"--resume", "sid"}}
+	gotNative := buildDelegatePrompt("now do Y", history, "sid-1", aNative)
+	if gotNative != "now do Y" {
+		t.Fatalf("expected native continuation prompt to remain unchanged, got:\n%s", gotNative)
+	}
+}
+
+type agentStub struct {
+	name         string
+	continuation []string
+}
+
+func (a *agentStub) Name() string                                     { return a.name }
+func (a *agentStub) BinaryName() string                               { return a.name }
+func (a *agentStub) CheckInstalled() error                            { return nil }
+func (a *agentStub) SupportedModels() []string                        { return nil }
+func (a *agentStub) DefaultModel() string                             { return "" }
+func (a *agentStub) PromptMode() agent.PromptMode                     { return agent.PromptArg }
+func (a *agentStub) ContinuationArgs(_ string) []string               { return a.continuation }
+func (a *agentStub) StreamCommand(string, agent.StreamOpts) *exec.Cmd { return nil }
+func (a *agentStub) ParseEvent([]byte) (agent.Event, error)           { return agent.Event{}, nil }
+func (a *agentStub) BlockedEnvVars() []string                         { return nil }
 
 // Verify that our orchestrator.Turn type matches what we construct.
 func TestOrchestratorTurnCompatibility(t *testing.T) {
