@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"time"
 
@@ -22,6 +23,10 @@ const (
 	EventError      EventType = "error"
 	EventDone       EventType = "done"
 )
+
+// ErrSkipEvent indicates the raw line is valid but not relevant for normalized
+// delegate output (for example, lifecycle/noise events).
+var ErrSkipEvent = errors.New("skip event")
 
 // Event is a normalized streaming event emitted by an agent's ParseEvent.
 // Raw is always populated by the agent — callers can use it for full-fidelity logging.

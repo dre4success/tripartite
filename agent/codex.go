@@ -83,8 +83,10 @@ func (c *CodexAgent) ParseEvent(line []byte) (Event, error) {
 		ThreadID  string `json:"thread_id"`
 		SessionID string `json:"session_id"`
 		Item      struct {
-			Type    string `json:"type"`
-			Content string `json:"content"`
+			Type    string          `json:"type"`
+			Text    string          `json:"text"`
+			Message string          `json:"message"`
+			Content json.RawMessage `json:"content"`
 		} `json:"item"`
 		Message string `json:"message"`
 	}
@@ -113,23 +115,34 @@ func (c *CodexAgent) ParseEvent(line []byte) (Event, error) {
 		base.Data = sid
 		return base, nil
 
+	case "turn.started":
+		// Ignore lifecycle scaffolding events; they are not user-facing output.
+		return Event{}, ErrSkipEvent
+
 	case "item.completed":
+		itemText := extractCodexItemText(raw.Item)
 		switch raw.Item.Type {
 		case "agent_message":
 			base.Type = EventText
-			base.Data = raw.Item.Content
+			base.Data = itemText
+		case "reasoning":
+			base.Type = EventThinking
+			base.Data = itemText
 		case "command":
 			base.Type = EventCommand
-			base.Data = raw.Item.Content
+			base.Data = itemText
+		case "tool_result":
+			base.Type = EventToolResult
+			base.Data = itemText
 		case "file_change":
 			base.Type = EventFileChange
-			base.Data = raw.Item.Content
+			base.Data = itemText
 		default:
-			return Event{}, fmt.Errorf("codex: unrecognized item type %q", raw.Item.Type)
+			return Event{}, ErrSkipEvent
 		}
 		return base, nil
 
-	case "turn.completed":
+	case "turn.completed", "turn.cancelled":
 		base.Type = EventDone
 		return base, nil
 
@@ -139,6 +152,66 @@ func (c *CodexAgent) ParseEvent(line []byte) (Event, error) {
 		return base, nil
 
 	default:
-		return Event{}, fmt.Errorf("codex: unrecognized event type %q", raw.Type)
+		return Event{}, ErrSkipEvent
 	}
+}
+
+func extractCodexItemText(item struct {
+	Type    string          `json:"type"`
+	Text    string          `json:"text"`
+	Message string          `json:"message"`
+	Content json.RawMessage `json:"content"`
+}) string {
+	if item.Text != "" {
+		return item.Text
+	}
+	if item.Message != "" {
+		return item.Message
+	}
+	if len(item.Content) == 0 || string(item.Content) == "null" {
+		return ""
+	}
+
+	var asString string
+	if err := json.Unmarshal(item.Content, &asString); err == nil && asString != "" {
+		return asString
+	}
+
+	var asObject struct {
+		Text    string `json:"text"`
+		Message string `json:"message"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(item.Content, &asObject); err == nil {
+		if asObject.Text != "" {
+			return asObject.Text
+		}
+		if asObject.Content != "" {
+			return asObject.Content
+		}
+		if asObject.Message != "" {
+			return asObject.Message
+		}
+	}
+
+	var asList []struct {
+		Text    string `json:"text"`
+		Message string `json:"message"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(item.Content, &asList); err == nil {
+		for _, block := range asList {
+			if block.Text != "" {
+				return block.Text
+			}
+			if block.Content != "" {
+				return block.Content
+			}
+			if block.Message != "" {
+				return block.Message
+			}
+		}
+	}
+
+	return ""
 }

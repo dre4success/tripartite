@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -86,6 +87,7 @@ func TestCodexParseEvent(t *testing.T) {
 		wantType EventType
 		wantData string
 		wantErr  bool
+		wantSkip bool
 	}{
 		{
 			name:     "session started",
@@ -98,6 +100,18 @@ func TestCodexParseEvent(t *testing.T) {
 			line:     `{"type":"item.completed","item":{"type":"agent_message","content":"hello"}}`,
 			wantType: EventText,
 			wantData: "hello",
+		},
+		{
+			name:     "text chunk via item.text",
+			line:     `{"type":"item.completed","item":{"type":"agent_message","text":"hello via text"}}`,
+			wantType: EventText,
+			wantData: "hello via text",
+		},
+		{
+			name:     "reasoning item",
+			line:     `{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}`,
+			wantType: EventThinking,
+			wantData: "thinking",
 		},
 		{
 			name:     "command",
@@ -117,21 +131,32 @@ func TestCodexParseEvent(t *testing.T) {
 			wantType: EventDone,
 		},
 		{
+			name:     "turn started is skipped",
+			line:     `{"type":"turn.started"}`,
+			wantSkip: true,
+		},
+		{
 			name:     "error",
 			line:     `{"type":"error","message":"failed"}`,
 			wantType: EventError,
 			wantData: "failed",
 		},
 		{
-			name:    "unknown event",
-			line:    `{"type":"unknown"}`,
-			wantErr: true,
+			name:     "unknown event is skipped",
+			line:     `{"type":"unknown"}`,
+			wantSkip: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ev, err := c.ParseEvent([]byte(tt.line))
+			if tt.wantSkip {
+				if !errors.Is(err, ErrSkipEvent) {
+					t.Fatalf("ParseEvent() err = %v, want ErrSkipEvent", err)
+				}
+				return
+			}
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ParseEvent() error = %v, wantErr %v", err, tt.wantErr)
 			}

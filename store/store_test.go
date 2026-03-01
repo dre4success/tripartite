@@ -221,6 +221,42 @@ func TestSaveMetaSessionSummaryIncludesDelegateDecisionAction(t *testing.T) {
 	}
 }
 
+func TestSaveMetaSessionSummaryDedupesModels(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "tripartite-test-meta-models-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	s, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	meta := RunMeta{
+		Models:    []string{"claude", "codex", "claude", "gemini", "codex"},
+		Timeout:   "1m0s",
+		Timestamp: time.Now().Format(time.RFC3339),
+		Mode:      "meta",
+	}
+
+	if err := s.SaveMetaSessionSummary(meta, nil); err != nil {
+		t.Fatalf("SaveMetaSessionSummary() error = %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(s.RunDir, "summary.md"))
+	if err != nil {
+		t.Fatalf("read summary.md: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "**Models:** claude, codex, gemini") {
+		t.Fatalf("missing deduped model list:\n%s", got)
+	}
+	if strings.Contains(got, "claude, codex, claude") || strings.Contains(got, "gemini, codex") {
+		t.Fatalf("summary contains duplicated model names:\n%s", got)
+	}
+}
+
 func TestSaveAndLoadMetaSessionState(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "tripartite-test-meta-state-*")
 	if err != nil {

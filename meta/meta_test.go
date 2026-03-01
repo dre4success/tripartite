@@ -625,6 +625,24 @@ func TestRequiresDelegateLaunchApproval(t *testing.T) {
 	}
 }
 
+func TestEnforceOneShotDelegateLaunchPolicy(t *testing.T) {
+	delegateRoute := router.Result{Intent: router.IntentDelegate}
+	brainstormRoute := router.Result{Intent: router.IntentBrainstorm}
+
+	if err := enforceOneShotDelegateLaunchPolicy(brainstormRoute, "full"); err != nil {
+		t.Fatalf("brainstorm route should not require launch gate: %v", err)
+	}
+	if err := enforceOneShotDelegateLaunchPolicy(delegateRoute, "safe"); err != nil {
+		t.Fatalf("safe sandbox should not require launch gate: %v", err)
+	}
+	if err := enforceOneShotDelegateLaunchPolicy(delegateRoute, "write"); err == nil {
+		t.Fatal("expected launch gate error for write sandbox in one-shot delegate")
+	}
+	if err := enforceOneShotDelegateLaunchPolicy(delegateRoute, "FULL"); err == nil {
+		t.Fatal("expected launch gate error for full sandbox in one-shot delegate")
+	}
+}
+
 func TestRequestDelegateLaunchApproval(t *testing.T) {
 	broker := cycle.NewApprovalBroker()
 	route := router.Result{Intent: router.IntentDelegate, Agent: "claude", Reason: "forced"}

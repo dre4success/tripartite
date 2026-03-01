@@ -754,6 +754,9 @@ func buildCycleConfig(
 func RunOnce(ctx context.Context, cfg Config, prompt string, history []Turn, turnNum int) (*Turn, error) {
 	route := router.Classify(prompt, router.Config{DefaultAgent: cfg.DefaultAgent})
 	route = adjustRouteForAvailability(route, cfg.DefaultAgent, adapterNames(cfg.Adapters), agentNames(cfg.Agents))
+	if err := enforceOneShotDelegateLaunchPolicy(route, cfg.Sandbox); err != nil {
+		return nil, err
+	}
 	return dispatch(ctx, cfg, prompt, history, turnNum, route)
 }
 
@@ -904,6 +907,19 @@ func requiresDelegateLaunchApproval(sandbox string) bool {
 	default:
 		return false
 	}
+}
+
+func enforceOneShotDelegateLaunchPolicy(route router.Result, sandbox string) error {
+	if route.Intent != router.IntentDelegate {
+		return nil
+	}
+	if !requiresDelegateLaunchApproval(sandbox) {
+		return nil
+	}
+	return fmt.Errorf(
+		"one-shot delegate in sandbox %q requires interactive approval; start interactive mode and use /approve, or re-run with --sandbox safe",
+		strings.ToLower(strings.TrimSpace(sandbox)),
+	)
 }
 
 func buildDelegatePrompt(prompt string, history []Turn, sessionID string, a agent.Agent) string {

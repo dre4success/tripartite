@@ -36,7 +36,7 @@ func main() {
 		runDelegate(os.Args[2:])
 	default:
 		if strings.HasPrefix(os.Args[1], "-") {
-			// Starts with flag → interactive mode with flags.
+			// Starts with flag: resolve mode inside runMeta from parsed positional args.
 			runMeta(nil, os.Args[1:])
 		} else {
 			// Not a subcommand → treat as one-shot prompt.
@@ -72,6 +72,13 @@ func runMeta(prompt *string, args []string) {
 		}
 	}
 	log := logger.New(*debug)
+	resolvedPrompt, err := resolveMetaPrompt(prompt, fs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	prompt = resolvedPrompt
+
 	resumePath := strings.TrimSpace(*resumeRun)
 	resumeSessionPath := strings.TrimSpace(*resumeSession)
 	if resumePath != "" && resumeSessionPath != "" {
@@ -357,6 +364,30 @@ func runMeta(prompt *string, args []string) {
 	if err := meta.Start(ctx, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func resolveMetaPrompt(explicitPrompt *string, fs *flag.FlagSet) (*string, error) {
+	if fs == nil {
+		return explicitPrompt, nil
+	}
+	if explicitPrompt != nil {
+		if fs.NArg() > 0 {
+			return nil, fmt.Errorf("unexpected positional arguments after prompt: %q", strings.Join(fs.Args(), " "))
+		}
+		return explicitPrompt, nil
+	}
+	switch fs.NArg() {
+	case 0:
+		return nil, nil
+	case 1:
+		prompt := strings.TrimSpace(fs.Arg(0))
+		if prompt == "" {
+			return nil, fmt.Errorf("prompt must not be empty")
+		}
+		return &prompt, nil
+	default:
+		return nil, fmt.Errorf("too many positional arguments: %q (quote multi-word prompts)", strings.Join(fs.Args(), " "))
 	}
 }
 

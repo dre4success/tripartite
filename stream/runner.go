@@ -3,6 +3,7 @@ package stream
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -114,6 +115,9 @@ func Run(ctx context.Context, a agent.Agent, prompt string, opts agent.StreamOpt
 			}
 			ev, err := a.ParseEvent(line)
 			if err != nil {
+				if errors.Is(err, agent.ErrSkipEvent) {
+					continue
+				}
 				if cb.OnParseError != nil {
 					cb.OnParseError(line, err)
 				}

@@ -199,13 +199,31 @@ func (s *Store) SaveTurnResponse(turn, round int, resp adapter.Response) error {
 	return s.writeJSON(filepath.Join(dir, filename), resp)
 }
 
+func dedupeModelNames(models []string) []string {
+	seen := make(map[string]struct{}, len(models))
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	return out
+}
+
 // SaveSummary writes a summary.md file at the end of the run.
 func (s *Store) SaveSummary(meta RunMeta, rounds [][]adapter.Response) error {
 	var b strings.Builder
+	models := dedupeModelNames(meta.Models)
 
 	b.WriteString("# Tripartite Run Summary\n\n")
 	fmt.Fprintf(&b, "**Prompt:** %s\n\n", meta.Prompt)
-	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(meta.Models, ", "))
+	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(models, ", "))
 	fmt.Fprintf(&b, "**Timestamp:** %s\n\n", meta.Timestamp)
 	b.WriteString("---\n\n")
 
@@ -241,9 +259,10 @@ type SessionTurn struct {
 // SaveSessionSummary writes a summary.md for a multi-turn interactive session.
 func (s *Store) SaveSessionSummary(meta RunMeta, turns []SessionTurn) error {
 	var b strings.Builder
+	models := dedupeModelNames(meta.Models)
 
 	b.WriteString("# Tripartite Session Summary\n\n")
-	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(meta.Models, ", "))
+	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(models, ", "))
 	fmt.Fprintf(&b, "**Timestamp:** %s\n\n", meta.Timestamp)
 	fmt.Fprintf(&b, "**Turns:** %d\n\n", len(turns))
 	b.WriteString("---\n\n")
@@ -299,9 +318,10 @@ type MetaSessionState struct {
 // SaveMetaSessionSummary writes a summary.md for a meta session with mixed engine turns.
 func (s *Store) SaveMetaSessionSummary(meta RunMeta, turns []MetaSessionTurn) error {
 	var b strings.Builder
+	models := dedupeModelNames(meta.Models)
 
 	b.WriteString("# Tripartite Meta Session Summary\n\n")
-	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(meta.Models, ", "))
+	fmt.Fprintf(&b, "**Models:** %s\n\n", strings.Join(models, ", "))
 	fmt.Fprintf(&b, "**Timestamp:** %s\n\n", meta.Timestamp)
 	fmt.Fprintf(&b, "**Turns:** %d\n\n", len(turns))
 	b.WriteString("---\n\n")
