@@ -56,6 +56,28 @@ func ParseApprovalLevel(raw string) (ApprovalLevel, error) {
 	}
 }
 
+// SandboxLevel controls the filesystem isolation for delegate agent runs.
+type SandboxLevel string
+
+const (
+	SandboxSafe  SandboxLevel = "safe"
+	SandboxWrite SandboxLevel = "write"
+	SandboxFull  SandboxLevel = "full"
+)
+
+func ParseSandboxLevel(raw string) (SandboxLevel, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(SandboxSafe):
+		return SandboxSafe, nil
+	case string(SandboxWrite):
+		return SandboxWrite, nil
+	case string(SandboxFull):
+		return SandboxFull, nil
+	default:
+		return "", fmt.Errorf("invalid sandbox level %q (expected: safe, write, full)", raw)
+	}
+}
+
 // Registry maps model names to their adapter constructors.
 var Registry = map[string]func() Adapter{
 	"claude": func() Adapter { return &Claude{} },

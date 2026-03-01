@@ -1,12 +1,28 @@
 package preflight
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/dre4success/tripartite/adapter"
 )
+
+// probeRunnable verifies a binary is actually executable by running it with
+// --version and a short timeout. This catches 0-byte stubs, permission errors,
+// and exec format errors that LookPath alone misses.
+func probeRunnable(binary string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "--version")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s found on PATH but not runnable: %w", binary, err)
+	}
+	return nil
+}
 
 // Result holds the preflight check outcome for all requested models.
 type Result struct {
@@ -28,6 +44,11 @@ func Check(adapters []adapter.Adapter, allowAPIKeys bool, minModels int) (*Resul
 	for _, a := range adapters {
 		if err := a.CheckInstalled(); err != nil {
 			res.Skipped[a.Name()] = fmt.Sprintf("not installed: %v", err)
+			continue
+		}
+
+		if err := probeRunnable(a.BinaryName()); err != nil {
+			res.Skipped[a.Name()] = err.Error()
 			continue
 		}
 

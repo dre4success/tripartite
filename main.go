@@ -102,12 +102,22 @@ func runMeta(prompt *string, args []string) {
 		fmt.Fprintln(os.Stderr, "Error: --resume-turn requires --resume")
 		os.Exit(1)
 	}
+	if (resumePath != "" || resumeSessionPath != "") && args != nil && fs.NArg() > 0 {
+		fmt.Fprintln(os.Stderr, "Error: --resume and --resume-session do not accept additional positional arguments")
+		os.Exit(1)
+	}
 
 	approvalLevel, err := adapter.ParseApprovalLevel(*approval)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	sandboxLevel, err := adapter.ParseSandboxLevel(*sandbox)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	normalizedSandbox := string(sandboxLevel)
 	cycleLiveMode, err := meta.ParseLiveCycleVerbosity(*cycleLive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -178,6 +188,9 @@ func runMeta(prompt *string, args []string) {
 	if len(unified.AgentNames) > 0 {
 		fmt.Printf("  [ready] agents: %s\n", strings.Join(unified.AgentNames, ", "))
 	}
+	for name, warning := range unified.Agents.Warnings {
+		fmt.Printf("  [warn] agent %s: %s\n", name, warning)
+	}
 	fmt.Println()
 
 	// Initialize artifact store (new run) or attach to an existing run for resume.
@@ -217,7 +230,7 @@ func runMeta(prompt *string, args []string) {
 		Adapters:     unified.Adapters.Ready,
 		Approval:     approvalLevel,
 		Agents:       unified.Agents.Ready,
-		Sandbox:      *sandbox,
+		Sandbox:      normalizedSandbox,
 		Worktree:     *worktreeEnabled,
 		Timeout:      *timeout,
 		Store:        s,
@@ -371,6 +384,13 @@ func runDelegate(args []string) {
 		os.Exit(1)
 	}
 
+	delegateSandboxLevel, err := adapter.ParseSandboxLevel(*sandbox)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	delegateSandbox := string(delegateSandboxLevel)
+
 	factory, ok := agent.Registry[agentName]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "Error: unknown agent %q (available: claude, codex, gemini)\n", agentName)
@@ -384,7 +404,11 @@ func runDelegate(args []string) {
 		os.Exit(1)
 	}
 	a := result.Ready[0]
-	fmt.Printf("  [ready] %s\n\n", a.Name())
+	fmt.Printf("  [ready] %s\n", a.Name())
+	for name, warning := range result.Warnings {
+		fmt.Printf("  [warn] agent %s: %s\n", name, warning)
+	}
+	fmt.Println()
 
 	s, err := store.New(*runsDir)
 	if err != nil {
@@ -427,7 +451,7 @@ func runDelegate(args []string) {
 		Agent:    a,
 		Prompt:   prompt,
 		Model:    *model,
-		Sandbox:  *sandbox,
+		Sandbox:  delegateSandbox,
 		Timeout:  *timeout,
 		Cwd:      runCwd,
 		Store:    s,

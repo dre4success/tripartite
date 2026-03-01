@@ -30,6 +30,38 @@ func TestParseApprovalLevel(t *testing.T) {
 	}
 }
 
+func TestParseSandboxLevel(t *testing.T) {
+	cases := []struct {
+		input string
+		want  SandboxLevel
+		ok    bool
+	}{
+		{input: "", want: SandboxSafe, ok: true},
+		{input: "safe", want: SandboxSafe, ok: true},
+		{input: "write", want: SandboxWrite, ok: true},
+		{input: "full", want: SandboxFull, ok: true},
+		{input: "SAFE", want: SandboxSafe, ok: true},
+		{input: "WRITE", want: SandboxWrite, ok: true},
+		{input: "FULL", want: SandboxFull, ok: true},
+		{input: " Full ", want: SandboxFull, ok: true},
+		{input: "invalid", ok: false},
+		{input: "danger", ok: false},
+	}
+
+	for _, tc := range cases {
+		got, err := ParseSandboxLevel(tc.input)
+		if tc.ok && err != nil {
+			t.Fatalf("ParseSandboxLevel(%q) unexpected error: %v", tc.input, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("ParseSandboxLevel(%q) expected error", tc.input)
+		}
+		if tc.ok && got != tc.want {
+			t.Fatalf("ParseSandboxLevel(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestClaudeBuildCommandApproval(t *testing.T) {
 	a := &Claude{}
 
